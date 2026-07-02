@@ -71,6 +71,20 @@ fun HomeScreen(
                     Text("View Previous Rounds 🗓️", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
             }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "© 2026 Prestige Worldwide. All rights reserved.",
+                    fontSize = 11.sp,
+                    color = textSecondary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }

@@ -7,6 +7,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -394,6 +396,9 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useTeams by viewModel.useTeams.collectAsState()
     val teams by viewModel.teams.collectAsState()
+    
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     val holePar = course?.holePars?.getOrNull(currentHole - 1) ?: 4
     val holeHcp = course?.holeHandicaps?.getOrNull(currentHole - 1) ?: 18
@@ -411,17 +416,40 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     Surface(modifier = Modifier.fillMaxSize(), color = appBg) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { if (currentHole > 1) { triggerAutoSave(); viewModel.setCurrentHole(currentHole - 1) } }) { 
+            Row(
+                modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onMenuClick, modifier = Modifier.size(48.dp)) {
+                    Text("☰", fontSize = 28.sp, color = textPrimary, fontWeight = FontWeight.ExtraBold)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(onClick = { 
+                    if (currentHole > 1) { 
+                        triggerAutoSave()
+                        viewModel.setCurrentHole(currentHole - 1) 
+                        coroutineScope.launch { listState.scrollToItem(0) }
+                    } 
+                }) { 
                     Text("<", color = textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 32.sp) 
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    DrawerHeaderBar("Hole $currentHole", isDarkMode, onMenuClick, null)
-                    Text("Par $holePar — HCP $holeHcp", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = textSecondary)
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Hole $currentHole", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = textPrimary)
+                    Text("Par $holePar — HCP $holeHcp", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textSecondary)
                 }
-                IconButton(onClick = { if (currentHole < 18) { triggerAutoSave(); viewModel.setCurrentHole(currentHole + 1) } }) { 
+                IconButton(onClick = { 
+                    if (currentHole < 18) { 
+                        triggerAutoSave()
+                        viewModel.setCurrentHole(currentHole + 1) 
+                        coroutineScope.launch { listState.scrollToItem(0) }
+                    } 
+                }) { 
                     Text(">", color = textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 32.sp) 
                 }
+                Spacer(modifier = Modifier.width(56.dp))
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -434,20 +462,20 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                 Button(
                     onClick = { viewModel.callPress(currentHole); triggerAutoSave() }, 
                     colors = ButtonDefaults.buttonColors(containerColor = goldColor), 
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                    modifier = Modifier.fillMaxWidth().height(44.dp)
                 ) {
-                    Text("Call Press Match", color = if (isDarkMode) Color.Black else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                    Text("Call Press Match", color = if (isDarkMode) Color.Black else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (useTeams && teams.size == 2) {
                     teams.forEach { team ->
                         item {
                             Box(modifier = Modifier.fillMaxWidth().background(GolfGreen.copy(alpha = 0.25f)).padding(vertical = 8.dp, horizontal = 12.dp)) {
-                                Text("🏆 Team: ${team.name}", color = if(isDarkMode) GoldAccent else GolfGreen, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+                                Text("🏆 Team: ${team.name}", color = if(isDarkMode) GoldAccent else GolfGreen, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
                             }
                         }
                         items(team.playerIds) { pId ->
@@ -485,9 +513,9 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
             Button(
                 onClick = { triggerAutoSave(); onNavigateToLeaderboard() }, 
                 colors = ButtonDefaults.buttonColors(containerColor = GolfGreen), 
-                modifier = Modifier.fillMaxWidth().height(56.dp)
+                modifier = Modifier.fillMaxWidth().height(48.dp)
             ) {
-                Text("View Match Leaderboard", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("View Match Leaderboard", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -507,31 +535,31 @@ fun PlayerScoreRow(
     Card(colors = CardDefaults.cardColors(containerColor = cardBg), elevation = CardDefaults.cardElevation(defaultElevation = 3.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(player.name, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = textPrimary)
-                Box(modifier = Modifier.background(if (isDarkMode) Color(0xFF2C2C2C) else Color(0xFFE8F5E9)).padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    Text(text = "NET: ${if (holeScore.grossScore > 0) holeScore.netScore else "-"}", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = goldColor)
+                Text(player.name, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = textPrimary)
+                Box(modifier = Modifier.background(if (isDarkMode) Color(0xFF2C2C2C) else Color(0xFFE8F5E9)).padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    Text(text = "NET: ${if (holeScore.grossScore > 0) holeScore.netScore else "-"}", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = goldColor)
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Column {
-                Text("Select Gross Score:", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = textSecondary)
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(scrollState), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Select Gross Score:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textSecondary)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(scrollState), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (scoreOption in 1..8) {
                         val isSelected = holeScore.grossScore == scoreOption
                         OutlinedButton(
                             onClick = { onGrossChange(scoreOption) },
                             colors = ButtonDefaults.outlinedButtonColors(containerColor = if (isSelected) GolfGreen else Color.Transparent, contentColor = if (isSelected) Color.White else textPrimary),
-                            border = BorderStroke(2.dp, if (isSelected) GolfGreen else textSecondary.copy(alpha = 0.6f)),
-                            modifier = Modifier.size(width = 54.dp, height = 50.dp),
+                            border = BorderStroke(1.5.dp, if (isSelected) GolfGreen else textSecondary.copy(alpha = 0.6f)),
+                            modifier = Modifier.size(width = 46.dp, height = 42.dp),
                             contentPadding = PaddingValues(0.dp)
-                        ) { Text(text = "$scoreOption", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold) }
+                        ) { Text(text = "$scoreOption", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Select Side Junk Dots:", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = textSecondary)
+                Text("Select Side Junk Dots:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textSecondary)
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Box(modifier = Modifier.weight(1f)) { DotCheckbox("Drive", holeScore.hasDrive, textPrimary) { onDotToggle("hasDrive") } }
@@ -556,10 +584,14 @@ fun PlayerScoreRow(
 
 @Composable
 fun DotCheckbox(label: String, checked: Boolean, textPrimary: Color, onCheckedChange: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onCheckedChange() }.padding(vertical = 4.dp)) {
-        Checkbox(checked = checked, onCheckedChange = { onCheckedChange() }, modifier = Modifier.scaleModifier(1.1f))
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onCheckedChange() }.padding(vertical = 2.dp)) {
+        Checkbox(
+            checked = checked, 
+            onCheckedChange = { onCheckedChange() }, 
+            modifier = Modifier.size(24.dp)
+        )
         Spacer(modifier = Modifier.width(4.dp))
-        Text(label, color = textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
 }
 
