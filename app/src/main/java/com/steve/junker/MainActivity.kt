@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                text = "RAW JUNKER", 
+                                text = "JUNKER", 
                                 modifier = Modifier.padding(16.dp), 
                                 fontSize = 24.sp, 
                                 fontWeight = FontWeight.ExtraBold,

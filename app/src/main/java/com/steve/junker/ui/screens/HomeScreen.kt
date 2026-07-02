@@ -39,7 +39,7 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "RAW JUNKER", 
+                    text = "JUNKER", 
                     fontSize = 38.sp, 
                     fontWeight = FontWeight.ExtraBold, 
                     color = GolfGreen, 

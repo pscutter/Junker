@@ -55,7 +55,7 @@ fun JunkerLaunchScreen(onTimeout: () -> Unit) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("RAW JUNKER", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, letterSpacing = 6.sp)
+            Text("JUNKER", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, letterSpacing = 6.sp)
             Spacer(modifier = Modifier.height(8.dp))
             Text("Side-Action Scorecard Matrix", fontSize = 14.sp, color = GoldAccent, fontWeight = FontWeight.Medium, letterSpacing = 2.sp)
         }
