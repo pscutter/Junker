@@ -1,6 +1,8 @@
 package com.steve.junker.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -70,6 +72,19 @@ fun HomeScreen(
                 ) {
                     Text("View Previous Rounds 🗓️", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = com.steve.junker.R.drawable.prestige_logo),
+                    contentDescription = "Prestige Worldwide Logo",
+                    modifier = Modifier.size(120.dp)
+                )
             }
             
             Spacer(modifier = Modifier.height(16.dp))
