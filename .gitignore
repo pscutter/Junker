@@ -1,0 +1,37 @@
+# Built development outputs and compilation artifacts
+*.apk
+*.aar
+*.ap_
+*.dex
+*.class
+bin/
+build/
+app/build/
+
+# Automatically generated Android Studio files and internal caches
+.gradle/
+local.properties
+.navigation/
+.captures/
+.externalNativeBuild/
+.cxx/
+cmake/
+
+# Local personal user system configurations
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/assetWizardSettings.xml
+.idea/modules.xml
+.idea/caches/
+.idea/libraries/
+*.iml
+*.iws
+
+# OS-specific hidden temp indexes
+.DS_Store
+Thumbs.db
+
+# Device testing snapshots and log metrics
+captures/
+log/
+*.log
