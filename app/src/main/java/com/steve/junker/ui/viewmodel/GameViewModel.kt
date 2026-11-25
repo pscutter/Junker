@@ -16,16 +16,12 @@ import com.steve.junker.data.models.Course
 import com.steve.junker.data.models.HoleScore
 import com.steve.junker.data.models.Player
 import com.steve.junker.data.models.Team
-import com.steve.junker.data.db.PlayerDao
-import com.steve.junker.data.db.CourseDao
-import com.steve.junker.data.db.PlayerEntity
-import com.steve.junker.data.db.CourseEntity
+import com.steve.junker.data.repository.JunkerRepository
 import org.json.JSONArray
 import org.json.JSONObject
 
 class GameViewModel : ViewModel() {
-    private var playerDao: PlayerDao? = null
-    private var courseDao: CourseDao? = null
+    private var repository: JunkerRepository? = null
     private val apiService = GolfCourseApiService.create()
 
     private val _isDarkMode = MutableStateFlow(false)
@@ -131,57 +127,100 @@ class GameViewModel : ViewModel() {
     private val _currentHole = MutableStateFlow(1)
     val currentHole: StateFlow<Int> = _currentHole.asStateFlow()
 
-    private val _pressHole = MutableStateFlow<Int?>(null)
-    val pressHole: StateFlow<Int?> = _pressHole.asStateFlow()
+    private val _pressHoles = MutableStateFlow<List<Int>>(emptyList())
+    val pressHoles: StateFlow<List<Int>> = _pressHoles.asStateFlow()
 
     private val _scores = MutableStateFlow<Map<String, List<HoleScore>>>(emptyMap())
     val scores: StateFlow<Map<String, List<HoleScore>>> = _scores.asStateFlow()
 
-    fun initDatabase(pDao: PlayerDao, cDao: CourseDao) {
-        this.playerDao = pDao
-        this.courseDao = cDao
+    private val _isRoundLocked = MutableStateFlow(false)
+    val isRoundLocked: StateFlow<Boolean> = _isRoundLocked.asStateFlow()
+
+    private var currentDeviceId: String = ""
+    private var activeRoundCreatorDeviceId: String? = null
+
+    fun setCurrentDeviceId(id: String) { currentDeviceId = id }
+    fun getCurrentDeviceId(): String = currentDeviceId
+
+    private val _isPlayersLoading = MutableStateFlow(false)
+    val isPlayersLoading: StateFlow<Boolean> = _isPlayersLoading.asStateFlow()
+
+    private val _isCoursesLoading = MutableStateFlow(false)
+    val isCoursesLoading: StateFlow<Boolean> = _isCoursesLoading.asStateFlow()
+
+    fun refreshPlayers() {
+        viewModelScope.launch {
+            _isPlayersLoading.value = true
+            try {
+                repository?.refreshPlayers()
+            } catch (e: Exception) {
+                // repo logs error
+            } finally {
+                _isPlayersLoading.value = false
+            }
+        }
+    }
+
+    fun refreshCourses() {
+        viewModelScope.launch {
+            _isCoursesLoading.value = true
+            try {
+                repository?.refreshCourses()
+            } catch (e: Exception) {
+                // repo logs error
+            } finally {
+                _isCoursesLoading.value = false
+            }
+        }
+    }
+
+    fun initRepository(repo: JunkerRepository) {
+        this.repository = repo
         
         viewModelScope.launch {
-            playerDao?.getAllPlayers()?.collect { entityList ->
-                _savedPlayers.value = entityList.map { Player(it.id, it.name, it.handicap) }
+            repository?.getAllPlayers()?.collect { list ->
+                _savedPlayers.value = list
             }
         }
         
         viewModelScope.launch {
-            courseDao?.getAllCourses()?.collect { entityList ->
-                _savedCourses.value = entityList.map { entity ->
-                    val handicaps = if (entity.holeHandicaps.isBlank()) emptyList() else entity.holeHandicaps.split(",").map { it.toInt() }
-                    val pars = if (entity.holePars.isBlank()) List(18) { 4 } else entity.holePars.split(",").map { it.toInt() }
-                    Course(entity.id, entity.name, handicaps, pars)
-                }
+            repository?.getAllCourses()?.collect { list ->
+                _savedCourses.value = list
             }
         }
+
+        viewModelScope.launch {
+            repository?.getAllRounds()?.collect { list ->
+                _savedRounds.value = list
+            }
+        }
+
+        refreshPlayers()
+        refreshCourses()
     }
 
     fun savePlayerToDb(player: Player) {
-        viewModelScope.launch { playerDao?.insertPlayer(PlayerEntity(player.id, player.name, player.handicap)) }
+        viewModelScope.launch { repository?.savePlayer(player) }
     }
 
     fun deletePlayerFromDb(player: Player) {
-        viewModelScope.launch { playerDao?.deletePlayer(PlayerEntity(player.id, player.name, player.handicap)) }
+        viewModelScope.launch { repository?.deletePlayer(player) }
     }
 
     fun saveCourseToDb(course: Course) {
-        viewModelScope.launch {
-            val handicapsString = course.holeHandicaps.joinToString(",")
-            val parsString = course.holePars.joinToString(",")
-            courseDao?.insertCourse(CourseEntity(course.id, course.name, handicapsString, parsString))
-        }
+        viewModelScope.launch { repository?.saveCourse(course) }
     }
 
     // FIX: Core parameters extended to safely bind team configurations on state initialization
     fun setupGame(players: List<Player>, course: Course, matchInTeamMode: Boolean = false, activeTeamsList: List<Team> = emptyList()) {
         _activePlayers.value = players
         _selectedCourse.value = course
-        _pressHole.value = null
+        _pressHoles.value = emptyList()
         _currentHole.value = 1
         _useTeams.value = matchInTeamMode
         _teams.value = activeTeamsList
+        _isRoundLocked.value = false
+        activeRoundCreatorDeviceId = currentDeviceId
         
         currentSessionRoundId = "round_${java.util.UUID.randomUUID()}"
         
@@ -190,7 +229,7 @@ class GameViewModel : ViewModel() {
     }
 
     fun setCurrentHole(hole: Int) { if (hole in 1..18) _currentHole.value = hole }
-    fun callPress(holeNumber: Int) { _pressHole.value = holeNumber }
+    fun callPress(holeNumber: Int) { _pressHoles.update { current -> if (current.contains(holeNumber)) current else current + holeNumber } }
 
     private fun computeWheeledNetScore(grossScore: Int, holeIndex: Int, playerId: String): Int {
         if (grossScore == 0) return 0
@@ -275,21 +314,10 @@ class GameViewModel : ViewModel() {
         }
     }
 
-    private var gameRoundDao: com.steve.junker.data.db.GameRoundDao? = null
-
     private val _savedRounds = MutableStateFlow<List<com.steve.junker.data.db.GameRoundEntity>>(emptyList())
     val savedRounds: StateFlow<List<com.steve.junker.data.db.GameRoundEntity>> = _savedRounds.asStateFlow()
 
-    fun initRoundDatabase(roundDao: com.steve.junker.data.db.GameRoundDao) {
-        this.gameRoundDao = roundDao
-        viewModelScope.launch {
-            gameRoundDao?.getAllSavedRounds()?.collect { entities ->
-                _savedRounds.value = entities
-            }
-        }
-    }
-
-    fun archiveCurrentRound(finalDotsMap: Map<String, Int>) {
+    fun archiveCurrentRound(finalDotsMap: Map<String, Int>, isLocked: Boolean = false) {
         val currentCourse = selectedCourse.value ?: return
         val currentPlayers = activePlayers.value
         val currentTeams = teams.value
@@ -313,8 +341,16 @@ class GameViewModel : ViewModel() {
                 }.joinToString(", ")
             }
 
+            if (isLocked) {
+                _isRoundLocked.value = true
+            }
             val rootContainerJsonObject = JSONObject()
             rootContainerJsonObject.put("isTeamMode", isTeamMode)
+            rootContainerJsonObject.put("isLocked", isLocked || _isRoundLocked.value)
+            rootContainerJsonObject.put("creatorDeviceId", activeRoundCreatorDeviceId ?: currentDeviceId)
+            val pressHolesArray = JSONArray()
+            pressHoles.value.forEach { pressHolesArray.put(it) }
+            rootContainerJsonObject.put("pressHoles", pressHolesArray)
 
             val scoresJsonObject = JSONObject()
             currentScoresMap.forEach { (playerId, holeList) ->
@@ -344,15 +380,15 @@ class GameViewModel : ViewModel() {
                 scoreSummary = "18-Hole Side Action Matrix Status Updated",
                 rawScoresJson = rootContainerJsonObject.toString()
             )
-            gameRoundDao?.insertRound(newRoundRecord)
+            repository?.saveRound(newRoundRecord)
         }
     }
 
     fun deleteRoundFromHistory(round: com.steve.junker.data.db.GameRoundEntity) {
-       viewModelScope.launch(Dispatchers.IO) {
-            gameRoundDao?.deleteRound(round)
+        viewModelScope.launch(Dispatchers.IO) {
+            repository?.deleteRound(round)
+        }
     }
-}
     
     fun restoreRoundFromHistory(
         roundId: String, 
@@ -360,31 +396,39 @@ class GameViewModel : ViewModel() {
         onRestored: () -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val savedCoursesList = courseDao?.getAllCourses()?.first() ?: emptyList()
+            val savedCoursesList = repository?.getAllCourses()?.first() ?: emptyList()
             val targetCourseEntity = savedCoursesList.find { it.name == courseName }
             
-            val restoredCourse = if (targetCourseEntity != null) {
-                val handicaps = targetCourseEntity.holeHandicaps.split(",").mapNotNull { it.toIntOrNull() }
-                val pars = targetCourseEntity.holePars.split(",").mapNotNull { it.toIntOrNull() }
-                Course(targetCourseEntity.id, targetCourseEntity.name, handicaps, pars)
-            } else {
-                Course("", courseName, List(18) { 18 }, List(18) { 4 })
-            }
+            val restoredCourse = targetCourseEntity ?: Course("", courseName, List(18) { 18 }, List(18) { 4 })
 
-            val savedRoundsList = gameRoundDao?.getAllSavedRounds()?.first() ?: emptyList()
+            val savedRoundsList = repository?.getAllRounds()?.first() ?: emptyList()
             val targetRound = savedRoundsList.find { it.id == roundId }
             
             val reconstructedPlayers = mutableListOf<Player>()
             val reconstructedTeams = mutableListOf<Team>()
             val reconstructedScores = mutableMapOf<String, List<HoleScore>>()
             var parsedAsTeams = false
-
+            val restoredPressHoles = mutableListOf<Int>()
+            var restoredIsLocked = false
+            var restoredCreatorDeviceId = ""
+ 
             if (targetRound != null) {
                 val directory = _savedPlayers.value
-
+ 
                 try {
                     val rootJson = JSONObject(targetRound.rawScoresJson)
                     parsedAsTeams = rootJson.optBoolean("isTeamMode", false)
+                    restoredIsLocked = rootJson.optBoolean("isLocked", false)
+                    restoredCreatorDeviceId = rootJson.optString("creatorDeviceId", "")
+                    if (rootJson.has("pressHoles")) {
+                        val arr = rootJson.getJSONArray("pressHoles")
+                        for (i in 0 until arr.length()) {
+                            restoredPressHoles.add(arr.getInt(i))
+                        }
+                    } else if (rootJson.has("pressHole")) {
+                        val v = rootJson.getInt("pressHole")
+                        if (v > 0) restoredPressHoles.add(v)
+                    }
                     
                     val jsonScores = if (rootJson.has("playerScoresMap")) {
                         rootJson.getJSONObject("playerScoresMap")
@@ -458,7 +502,13 @@ class GameViewModel : ViewModel() {
                 _teams.value = reconstructedTeams
                 _activePlayers.value = reconstructedPlayers
                 _scores.value = reconstructedScores
+                _pressHoles.value = restoredPressHoles
                 _currentHole.value = 1
+                
+                activeRoundCreatorDeviceId = if (restoredCreatorDeviceId.isNotEmpty()) restoredCreatorDeviceId else null
+                val isDeviceAuthorized = restoredCreatorDeviceId.isEmpty() || restoredCreatorDeviceId == currentDeviceId
+                _isRoundLocked.value = restoredIsLocked || !isDeviceAuthorized
+                
                 onRestored()
             }
         }

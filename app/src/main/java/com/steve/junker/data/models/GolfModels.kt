@@ -35,7 +35,7 @@ data class MatchCalculationOutput(
 
 fun calculateJunkDots(
     scores: Map<String, List<HoleScore>>, 
-    pressHole: Int?, 
+    pressHoles: List<Int>, 
     course: Course?,
     teams: List<Team>?,
     useTeams: Boolean
@@ -49,8 +49,8 @@ fun calculateJunkDots(
     
     if (course == null) return MatchCalculationOutput(entityTotals, holeBreakdowns)
     
-    var ctpCarryOverBank = 0
-    var holeWinCarryOverBank = 0
+    var skinsCarryOverValue = 0
+    var ctpCarryOverValue = 0
     
     fun getOwnerEntityId(playerId: String): String {
         if (!isTeamMode) return playerId
@@ -58,13 +58,16 @@ fun calculateJunkDots(
     }
 
     for (h in 1..18) {
-        val multiplier = if (pressHole != null && h >= pressHole) 2 else 1
+        val multiplier = if (pressHoles.isEmpty()) 1 else {
+            var m = 1
+            pressHoles.sorted().forEach { pHole ->
+                if (h >= pHole) m *= 2
+            }
+            m
+        }
         val holePar = course.holePars.getOrNull(h - 1) ?: 4
         
-        holeWinCarryOverBank += 1
-        if (holePar == 3) {
-            ctpCarryOverBank += 1
-        }
+        // Skins and CTP values are accumulated dynamically in their respective steps to support press timing changes
         
         val entityMinNets = mutableMapOf<String, Int>()
         var holeHasValidScores = false
@@ -117,37 +120,44 @@ fun calculateJunkDots(
         }
         
         // 2. Evaluate and apply skin rewards to the exact same cell matrix block cleanly
+        val currentHoleSkinValue = 1 * multiplier
         if (holeHasValidScores && entityMinNets.isNotEmpty()) {
             val absoluteMinNet = entityMinNets.values.minOrNull() ?: Int.MAX_VALUE
             val prospectiveWinners = entityMinNets.filterValues { it == absoluteMinNet }.keys
             
             if (prospectiveWinners.size == 1) {
                 val winnerId = prospectiveWinners.first()
-                val totalSkinsAwarded = holeWinCarryOverBank * multiplier
+                val totalSkinsAwarded = currentHoleSkinValue + skinsCarryOverValue
                 
                 val existingRes = holeBreakdowns[winnerId]!![h - 1]
                 holeBreakdowns[winnerId]!![h - 1] = existingRes.copy(skinDotsWon = totalSkinsAwarded)
                 entityTotals[winnerId] = (entityTotals[winnerId] ?: 0) + totalSkinsAwarded
-                holeWinCarryOverBank = 0 
+                skinsCarryOverValue = 0 
+            } else {
+                skinsCarryOverValue += currentHoleSkinValue
             }
+        } else {
+            skinsCarryOverValue += currentHoleSkinValue
         }
         
-        // 3. Evaluate and apply Par-3 Closest to Pin rewards
-        if (holePar == 3 && ctpWinnersThisHole.size == 1) {
-            val winnerId = ctpWinnersThisHole.first()
-            val totalCtpAwarded = ctpCarryOverBank * multiplier
-            
-            val existingRes = holeBreakdowns[winnerId]!![h - 1]
-            holeBreakdowns[winnerId]!![h - 1] = existingRes.copy(ctpDotsWon = totalCtpAwarded)
-            entityTotals[winnerId] = (entityTotals[winnerId] ?: 0) + totalCtpAwarded
-            ctpCarryOverBank = 0
+        // 3. Evaluate and apply Par-3 Closest to Pin rewards (CTP carries over value-based skin dots when no one wins it)
+        val currentCtpDotValue = 1 * multiplier
+        if (holePar == 3) {
+            if (ctpWinnersThisHole.size == 1) {
+                val winnerId = ctpWinnersThisHole.first()
+                val totalCtpAwarded = currentCtpDotValue + ctpCarryOverValue
+                
+                val existingRes = holeBreakdowns[winnerId]!![h - 1]
+                holeBreakdowns[winnerId]!![h - 1] = existingRes.copy(ctpDotsWon = totalCtpAwarded)
+                entityTotals[winnerId] = (entityTotals[winnerId] ?: 0) + totalCtpAwarded
+                ctpCarryOverValue = 0
+            } else {
+                ctpCarryOverValue += currentCtpDotValue
+            }
         }
     }
     
     // --- SIDE MATCH CALCULATIONS ---
-    val frontMultiplier = 1
-    val backMultiplier = if (pressHole != null && pressHole <= 10) 2 else 1
-    val overallMultiplier = if (pressHole != null) 2 else 1
     
     val entityFrontNets = entityKeys.associateWith { 0 }.toMutableMap()
     val entityBackNets = entityKeys.associateWith { 0 }.toMutableMap()
@@ -180,11 +190,11 @@ fun calculateJunkDots(
         }
     }
     
-    awardSideDot(entityFrontNets, frontMultiplier)
-    awardSideDot(entityBackNets, backMultiplier)
+    awardSideDot(entityFrontNets, 1)
+    awardSideDot(entityBackNets, 1)
     
     val entityTotalNets = entityKeys.associateWith { (entityFrontNets[it] ?: 0) + (entityBackNets[it] ?: 0) }
-    awardSideDot(entityTotalNets, overallMultiplier)
+    awardSideDot(entityTotalNets, 1)
     
     return MatchCalculationOutput(entityTotals, holeBreakdowns)
 }

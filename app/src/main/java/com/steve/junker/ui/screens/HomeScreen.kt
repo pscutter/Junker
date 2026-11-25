@@ -55,7 +55,10 @@ fun HomeScreen(
                 )
 
                 Button(
-                    onClick = onNewRoundClick,
+                    onClick = {
+                        viewModel.refreshPlayers()
+                        onNewRoundClick()
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = GolfGreen),
                     modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp)
                 ) {
