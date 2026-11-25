@@ -103,6 +103,17 @@ fun MatchHistoryScreen(
                                     lineHeight = 24.sp
                                 )
                                 
+                                val isLocked = try {
+                                    val root = org.json.JSONObject(round.rawScoresJson)
+                                    val creator = root.optString("creatorDeviceId", "")
+                                    val isLockedFlag = root.optBoolean("isLocked", false)
+                                    val currentDevice = viewModel.getCurrentDeviceId()
+                                    val unauthorized = creator.isNotEmpty() && creator != currentDevice
+                                    isLockedFlag || unauthorized
+                                } catch (e: Exception) {
+                                    false
+                                }
+                                
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Box(
                                     modifier = Modifier
@@ -111,7 +122,12 @@ fun MatchHistoryScreen(
                                         .padding(vertical = 6.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text("📝 Tap to Resume / Edit Round", color = GolfGreen, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+                                    Text(
+                                        text = if (isLocked) "👁️ Tap to View Round" else "📝 Tap to Resume / Edit Round",
+                                        color = GolfGreen,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
                                 }
                             }
                         }

@@ -4,6 +4,9 @@ plugins {
     id("com.google.devtools.ksp") version "1.9.22-1.0.17"
 }
 
+import java.util.Properties
+import java.io.FileInputStream
+
 android {
     namespace = "com.steve.junker"
     compileSdk = 34
@@ -19,11 +22,32 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        val localProperties = Properties().apply {
+            val localPropertiesFile = rootProject.file("local.properties")
+            if (localPropertiesFile.exists()) {
+                localPropertiesFile.inputStream().use { stream ->
+                    load(stream)
+                }
+            }
+        }
+        val airtableToken = localProperties.getProperty("AIRTABLE_TOKEN")
+            ?: localProperties.getProperty("airtable.token")
+            ?: System.getenv("AIRTABLE_TOKEN")
+            ?: ""
+        val airtableBaseId = localProperties.getProperty("AIRTABLE_BASE_ID")
+            ?: localProperties.getProperty("airtable.base.id")
+            ?: System.getenv("AIRTABLE_BASE_ID")
+            ?: "app3uUoCzkeAFm5Nv"
+
+        buildConfigField("String", "AIRTABLE_TOKEN", "\"$airtableToken\"")
+        buildConfigField("String", "AIRTABLE_BASE_ID", "\"$airtableBaseId\"")
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -42,6 +66,7 @@ android {
     
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     
     composeOptions {

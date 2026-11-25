@@ -30,6 +30,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import com.steve.junker.data.db.JunkerDatabase
+import com.steve.junker.data.repository.AirtableJunkerRepository
+import com.steve.junker.data.repository.RoomJunkerRepository
 import com.steve.junker.ui.screens.*
 import com.steve.junker.ui.viewmodel.GameViewModel
 import com.steve.junker.data.models.HoleScore
@@ -49,10 +51,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val database = JunkerDatabase.getDatabase(this)
+        // To use local SQLite Room database, swap with RoomJunkerRepository:
+        // val database = JunkerDatabase.getDatabase(this)
+        // val repository = RoomJunkerRepository(database.playerDao(), database.courseDao(), database.gameRoundDao())
         
-        gameViewModel.initDatabase(database.playerDao(), database.courseDao())
-        gameViewModel.initRoundDatabase(database.gameRoundDao())
+        // Using Airtable database:
+        val repository = AirtableJunkerRepository(applicationContext)
+        gameViewModel.initRepository(repository)
+
+        val deviceId = android.provider.Settings.Secure.getString(
+            contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID
+        ) ?: "unknown_device"
+        gameViewModel.setCurrentDeviceId(deviceId)
 
         setContent {
             MaterialTheme {
@@ -76,7 +87,7 @@ class MainActivity : ComponentActivity() {
                                 text = "JUNKER", 
                                 modifier = Modifier.padding(16.dp), 
                                 fontSize = 24.sp, 
-                                fontWeight = FontWeight.ExtraBold,
+                                fontWeight = FontWeight.ExtraBold, 
                                 color = GolfGreen
                             )
                             Divider(modifier = Modifier.padding(vertical = 8.dp))
@@ -96,6 +107,7 @@ class MainActivity : ComponentActivity() {
                                 onClick = { 
                                     scope.launch { 
                                         drawerState.close()
+                                        gameViewModel.refreshPlayers()
                                         navController.navigate("player_setup") 
                                     } 
                                 }
@@ -226,16 +238,18 @@ fun DrawerHeaderBar(title: String, isDarkMode: Boolean, onMenuClick: () -> Unit,
 fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackToScoring: () -> Unit, onReset: () -> Unit) {
     val players by viewModel.activePlayers.collectAsState()
     val scores by viewModel.scores.collectAsState()
-    val pressHole by viewModel.pressHole.collectAsState()
+    val pressHoles by viewModel.pressHoles.collectAsState()
     val course by viewModel.selectedCourse.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useTeams by viewModel.useTeams.collectAsState()
     val teams by viewModel.teams.collectAsState()
     var expandedTeamIds by remember { mutableStateOf(emptySet<String>()) }
+    var selectedHolePlayerForPopup by remember { mutableStateOf<Pair<Player, Int>?>(null) }
+    val isRoundLocked by viewModel.isRoundLocked.collectAsState()
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val context = LocalContext.current
     
-    val calculationOutput = calculateJunkDots(scores, pressHole, course, teams, useTeams)
+    val calculationOutput = calculateJunkDots(scores, pressHoles, course, teams, useTeams)
     val finalCalculatedJunk = calculationOutput.entityTotals
     val breakdownMatrix = calculationOutput.holeBreakdowns
     
@@ -243,6 +257,7 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
     val appBg = getAppBg(isDarkMode)
     val cardBg = getCardBg(isDarkMode)
     val textPrimary = getTextPrimary(isDarkMode)
+    val textSecondary = getTextSecondary(isDarkMode)
     val goldColor = getGoldThemeColor(isDarkMode)
 
     Surface(modifier = Modifier.fillMaxSize(), color = appBg) {
@@ -266,7 +281,7 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                              val currentDate = sdf.format(java.util.Date())
                             
                             // Generate high-resolution, full scorecard image programmatically
-                            val finalBitmap = drawScorecardToBitmap(context, players, scores, course, teams, useTeams, finalCalculatedJunk)
+                            val finalBitmap = drawScorecardToBitmap(context, players, scores, course, teams, useTeams, finalCalculatedJunk, pressHoles)
                             
                             // Save to cache directory
                             val cachePath = java.io.File(context.cacheDir, "images")
@@ -279,10 +294,181 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                 
                                 val contentUri = androidx.core.content.FileProvider.getUriForFile(context, "com.steve.junker.fileprovider", file)
                                 
+                                val emailBodyBuilder = StringBuilder()
+                                emailBodyBuilder.append("Attached is the Junker Match Scorecard.\n\n")
+                                emailBodyBuilder.append("Date: $currentDate\n")
+                                emailBodyBuilder.append("Course: ${course?.name ?: "Unknown Course"}\n")
+                                emailBodyBuilder.append("Par: ${course?.holePars?.sum() ?: 72}\n\n")
+
+                                emailBodyBuilder.append("--- LEADERBOARD ---\n")
+                                if (useTeams && teams.isNotEmpty()) {
+                                    teams.forEach { team ->
+                                        val totalDots = finalCalculatedJunk[team.id] ?: 0
+                                        emailBodyBuilder.append("${team.name}: $totalDots dots\n")
+                                    }
+                                } else {
+                                    players.forEach { player ->
+                                        val totalDots = finalCalculatedJunk[player.id] ?: 0
+                                        emailBodyBuilder.append("${player.name}: $totalDots dots\n")
+                                    }
+                                }
+                                emailBodyBuilder.append("\n")
+                                emailBodyBuilder.append("--- HOLE-BY-HOLE DOTS BREAKDOWN ---\n")
+                                 for (h in 1..18) {
+                                     val par = course?.holePars?.getOrNull(h - 1) ?: 4
+                                     val hcp = course?.holeHandicaps?.getOrNull(h - 1) ?: 18
+                                     val multiplier = if (pressHoles.isEmpty()) 1 else {
+                                         var m = 1
+                                         pressHoles.sorted().forEach { pHole ->
+                                             if (h >= pHole) m *= 2
+                                         }
+                                         m
+                                     }
+                                     val pressStr = if (multiplier > 1) " [PRESS ACTIVE x$multiplier]" else ""
+                                     
+                                     val holeDetailsBuilder = StringBuilder()
+                                    
+                                    if (useTeams && teams.isNotEmpty()) {
+                                        // 1. Show team skins if any
+                                        teams.forEach { team ->
+                                            val hCalc = breakdownMatrix[team.id]?.getOrNull(h - 1) ?: HoleCalculationResult()
+                                            if (hCalc.skinDotsWon > 0) {
+                                                holeDetailsBuilder.append("  - ${team.name}: Skins: ${hCalc.skinDotsWon} dots\n")
+                                            }
+                                        }
+                                        // 2. Show individual player junk details
+                                        players.forEach { player ->
+                                            val playerHoleScore = scores[player.id]?.getOrNull(h - 1) ?: HoleScore()
+                                            val ownerId = teams.find { it.playerIds.contains(player.id) }?.id ?: player.id
+                                            val hCalc = breakdownMatrix[ownerId]?.getOrNull(h - 1) ?: HoleCalculationResult()
+                                            
+                                            val dotsList = mutableListOf<String>()
+                                            var playerTotalDots = 0
+                                            
+                                            if (par == 3 && playerHoleScore.hasCtp && hCalc.ctpDotsWon > 0) {
+                                                dotsList.add("CTP: ${hCalc.ctpDotsWon}")
+                                                playerTotalDots += hCalc.ctpDotsWon
+                                            }
+                                            
+                                            val scoreRelationToPar = playerHoleScore.grossScore - par
+                                            if (playerHoleScore.grossScore > 0) {
+                                                if (scoreRelationToPar == -1) {
+                                                    dotsList.add("Birdie: ${2 * multiplier}")
+                                                    playerTotalDots += 2 * multiplier
+                                                } else if (scoreRelationToPar <= -2) {
+                                                    dotsList.add("Eagle or Better: ${5 * multiplier}")
+                                                    playerTotalDots += 5 * multiplier
+                                                }
+                                                
+                                                val madeParOrBetter = playerHoleScore.grossScore <= par
+                                                if (madeParOrBetter) {
+                                                    if (playerHoleScore.hasDrive) {
+                                                        dotsList.add("Drive: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                    if (playerHoleScore.hasSandy) {
+                                                        dotsList.add("Sandy: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                    if (playerHoleScore.hasJacques) {
+                                                        dotsList.add("Jacques: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                    if (playerHoleScore.hasLostBoy) {
+                                                        dotsList.add("Lost Boy: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                }
+                                            }
+                                            
+                                            if (playerHoleScore.hasPoley) {
+                                                dotsList.add("Poley: ${1 * multiplier}")
+                                                playerTotalDots += 1 * multiplier
+                                            }
+                                            if (playerHoleScore.hasDoublePoley) {
+                                                dotsList.add("Double Poley: ${2 * multiplier}")
+                                                playerTotalDots += 2 * multiplier
+                                            }
+                                            
+                                            if (playerTotalDots > 0) {
+                                                holeDetailsBuilder.append("  - ${player.name}: $playerTotalDots dots (${dotsList.joinToString(", ")})\n")
+                                            }
+                                        }
+                                    } else {
+                                        // Individual mode: show all dots (skins, CTP, junk) by player
+                                        players.forEach { player ->
+                                            val hCalc = breakdownMatrix[player.id]?.getOrNull(h - 1) ?: HoleCalculationResult()
+                                            val playerHoleScore = scores[player.id]?.getOrNull(h - 1) ?: HoleScore()
+                                            
+                                            val dotsList = mutableListOf<String>()
+                                            var playerTotalDots = 0
+                                            
+                                            if (hCalc.skinDotsWon > 0) {
+                                                dotsList.add("Skins: ${hCalc.skinDotsWon}")
+                                                playerTotalDots += hCalc.skinDotsWon
+                                            }
+                                            if (par == 3 && playerHoleScore.hasCtp && hCalc.ctpDotsWon > 0) {
+                                                dotsList.add("CTP: ${hCalc.ctpDotsWon}")
+                                                playerTotalDots += hCalc.ctpDotsWon
+                                            }
+                                            
+                                            val scoreRelationToPar = playerHoleScore.grossScore - par
+                                            if (playerHoleScore.grossScore > 0) {
+                                                if (scoreRelationToPar == -1) {
+                                                    dotsList.add("Birdie: ${2 * multiplier}")
+                                                    playerTotalDots += 2 * multiplier
+                                                } else if (scoreRelationToPar <= -2) {
+                                                    dotsList.add("Eagle or Better: ${5 * multiplier}")
+                                                    playerTotalDots += 5 * multiplier
+                                                }
+                                                
+                                                val madeParOrBetter = playerHoleScore.grossScore <= par
+                                                if (madeParOrBetter) {
+                                                    if (playerHoleScore.hasDrive) {
+                                                        dotsList.add("Drive: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                    if (playerHoleScore.hasSandy) {
+                                                        dotsList.add("Sandy: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                    if (playerHoleScore.hasJacques) {
+                                                        dotsList.add("Jacques: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                    if (playerHoleScore.hasLostBoy) {
+                                                        dotsList.add("Lost Boy: ${1 * multiplier}")
+                                                        playerTotalDots += 1 * multiplier
+                                                    }
+                                                }
+                                            }
+                                            
+                                            if (playerHoleScore.hasPoley) {
+                                                dotsList.add("Poley: ${1 * multiplier}")
+                                                playerTotalDots += 1 * multiplier
+                                            }
+                                            if (playerHoleScore.hasDoublePoley) {
+                                                dotsList.add("Double Poley: ${2 * multiplier}")
+                                                playerTotalDots += 2 * multiplier
+                                            }
+                                            
+                                            if (playerTotalDots > 0) {
+                                                holeDetailsBuilder.append("  - ${player.name}: $playerTotalDots dots (${dotsList.joinToString(", ")})\n")
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (holeDetailsBuilder.isNotEmpty()) {
+                                        emailBodyBuilder.append("\nHole $h (Par $par, HCP $hcp)$pressStr:\n")
+                                        emailBodyBuilder.append(holeDetailsBuilder.toString())
+                                    }
+                                }
+                                val emailBodyText = emailBodyBuilder.toString()
+
                                 val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                                     type = "image/png"
                                     putExtra(android.content.Intent.EXTRA_SUBJECT, "Junker Scorecard - ${course?.name ?: "Match"}")
-                                    putExtra(android.content.Intent.EXTRA_TEXT, "Attached is the Junker Match Scorecard.\n\nDate: $currentDate\nCourse: ${course?.name ?: "Unknown Course"}\nPar: ${course?.holePars?.sum() ?: 72}")
+                                    putExtra(android.content.Intent.EXTRA_TEXT, emailBodyText)
                                     putExtra(android.content.Intent.EXTRA_STREAM, contentUri)
                                     addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
@@ -304,14 +490,20 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            viewModel.archiveCurrentRound(finalCalculatedJunk)
+                            if (!isRoundLocked) {
+                                viewModel.archiveCurrentRound(finalCalculatedJunk, isLocked = true)
+                            }
                             onReset()
                         }, 
-                        colors = ButtonDefaults.buttonColors(containerColor = GolfGreen), 
+                        enabled = !isRoundLocked,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = GolfGreen,
+                            disabledContainerColor = GolfGreen.copy(alpha = 0.5f)
+                        ), 
                         modifier = Modifier.height(50.dp).weight(1f),
                         contentPadding = PaddingValues(horizontal = 4.dp)
                     ) {
-                        Text("Finish", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text(if (isRoundLocked) "Close" else "Finish", color = if (isRoundLocked) Color.White.copy(alpha = 0.5f) else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -322,18 +514,18 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                     Text(if (useTeams) " Teams Matrix" else " Player Name", color = Color.White, fontWeight = FontWeight.ExtraBold, modifier = Modifier.width(220.dp).padding(start = 8.dp), fontSize = 20.sp)
                     Row(modifier = Modifier.weight(1f).horizontalScroll(horizontalScrollState), verticalAlignment = Alignment.CenterVertically) {
                         for (h in 1..9) {
-                            Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
-                                Text(text = "H$h", color = if (pressHole != null && h >= pressHole!!) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
-                            }
-                        }
+                                     Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
+                                         Text(text = "H$h", color = if (pressHoles.isNotEmpty() && h >= pressHoles.min()) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                                     }
+                                 }
                         Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
                             Text("F9", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                         }
                         for (h in 10..18) {
-                            Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
-                                Text(text = "H$h", color = if (pressHole != null && h >= pressHole!!) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
-                            }
-                        }
+                                     Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
+                                         Text(text = "H$h", color = if (pressHoles.isNotEmpty() && h >= pressHoles.min()) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                                     }
+                                 }
                         Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
                             Text("B9", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                         }
@@ -533,12 +725,27 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                             Row(modifier = Modifier.weight(1f).horizontalScroll(horizontalScrollState), verticalAlignment = Alignment.CenterVertically) {
                                                 for (h in 1..9) {
                                                     val hScore = playerHoleScores.getOrNull(h - 1) ?: HoleScore()
-                                                    Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, lineColor), contentAlignment = Alignment.Center) {
-                                                        if (hScore.grossScore > 0) {
-                                                            Text("${hScore.grossScore}", color = textPrimary.copy(alpha = 0.8f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                                                        } else {
-                                                            Text("-", color = Color.Gray, fontSize = 18.sp)
-                                                        }
+                                                    val par = course?.holePars?.getOrNull(h - 1) ?: 4
+                                                    val wonSkin = isPlayerHoleWinnerForTeam(player, h - 1, scores, breakdownMatrix, teams)
+                                                    val hasDots = playerEarnedDotsOnHole(hScore, par) || wonSkin
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(84.dp)
+                                                            .height(56.dp)
+                                                            .border(1.dp, lineColor)
+                                                            .clickable {
+                                                                if (hScore.grossScore > 0) {
+                                                                    selectedHolePlayerForPopup = Pair(player, h)
+                                                                }
+                                                            },
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        GolfScoreBadge(
+                                                            score = hScore.grossScore,
+                                                            par = par,
+                                                            textColor = textPrimary.copy(alpha = 0.8f),
+                                                            hasDots = hasDots
+                                                        )
                                                     }
                                                 }
                                                 Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, lineColor), contentAlignment = Alignment.Center) {
@@ -546,12 +753,27 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                                 }
                                                 for (h in 10..18) {
                                                     val hScore = playerHoleScores.getOrNull(h - 1) ?: HoleScore()
-                                                    Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, lineColor), contentAlignment = Alignment.Center) {
-                                                        if (hScore.grossScore > 0) {
-                                                            Text("${hScore.grossScore}", color = textPrimary.copy(alpha = 0.8f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                                                        } else {
-                                                            Text("-", color = Color.Gray, fontSize = 18.sp)
-                                                        }
+                                                    val par = course?.holePars?.getOrNull(h - 1) ?: 4
+                                                    val wonSkin = isPlayerHoleWinnerForTeam(player, h - 1, scores, breakdownMatrix, teams)
+                                                    val hasDots = playerEarnedDotsOnHole(hScore, par) || wonSkin
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(84.dp)
+                                                            .height(56.dp)
+                                                            .border(1.dp, lineColor)
+                                                            .clickable {
+                                                                if (hScore.grossScore > 0) {
+                                                                    selectedHolePlayerForPopup = Pair(player, h)
+                                                                }
+                                                            },
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        GolfScoreBadge(
+                                                            score = hScore.grossScore,
+                                                            par = par,
+                                                            textColor = textPrimary.copy(alpha = 0.8f),
+                                                            hasDots = hasDots
+                                                        )
                                                     }
                                                 }
                                                 Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, lineColor), contentAlignment = Alignment.Center) {
@@ -583,7 +805,17 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                      val lineColor = if (isDarkMode) Color.DarkGray else Color.LightGray
                                      for (h in 1..9) {
                                          val hScore = playerHoleScores.getOrNull(h - 1) ?: HoleScore()
-                                         Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, lineColor)) {
+                                         Box(
+                                             modifier = Modifier
+                                                 .width(84.dp)
+                                                 .height(56.dp)
+                                                 .border(1.dp, lineColor)
+                                                 .clickable {
+                                                     if (hScore.grossScore > 0) {
+                                                         selectedHolePlayerForPopup = Pair(player, h)
+                                                     }
+                                                 }
+                                         ) {
                                              if (hScore.grossScore > 0) {
                                                  val hCalc = playerBreakdowns.getOrNull(h - 1) ?: HoleCalculationResult()
                                                  val dots = hCalc.basicJunkDots + hCalc.skinDotsWon + hCalc.ctpDotsWon
@@ -595,12 +827,23 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                                          strokeWidth = 2f
                                                      )
                                                  }
+                                                 val par = course?.holePars?.getOrNull(h - 1) ?: 4
+                                                 val hasDots = playerEarnedDotsOnHole(hScore, par) || hCalc.skinDotsWon > 0
+                                                 GolfScoreBadge(
+                                                     score = hScore.grossScore,
+                                                     par = par,
+                                                     textColor = textPrimary,
+                                                     hasDots = hasDots,
+                                                     modifier = Modifier
+                                                         .align(Alignment.TopStart)
+                                                         .padding(start = 6.dp, top = 4.dp)
+                                                 )
                                                  Text(
-                                                     text = "${hScore.grossScore}/${hScore.netScore}",
+                                                     text = "${hScore.netScore}",
                                                      color = textPrimary,
                                                      fontSize = 15.sp,
                                                      fontWeight = FontWeight.Bold,
-                                                     modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 4.dp)
+                                                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp)
                                                  )
                                                  if (dots > 0) {
                                                      Text(
@@ -653,7 +896,17 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                      }
                                      for (h in 10..18) {
                                          val hScore = playerHoleScores.getOrNull(h - 1) ?: HoleScore()
-                                         Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, lineColor)) {
+                                         Box(
+                                             modifier = Modifier
+                                                 .width(84.dp)
+                                                 .height(56.dp)
+                                                 .border(1.dp, lineColor)
+                                                 .clickable {
+                                                     if (hScore.grossScore > 0) {
+                                                         selectedHolePlayerForPopup = Pair(player, h)
+                                                     }
+                                                 }
+                                         ) {
                                              if (hScore.grossScore > 0) {
                                                  val hCalc = playerBreakdowns.getOrNull(h - 1) ?: HoleCalculationResult()
                                                  val dots = hCalc.basicJunkDots + hCalc.skinDotsWon + hCalc.ctpDotsWon
@@ -665,12 +918,23 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                                          strokeWidth = 2f
                                                      )
                                                  }
+                                                 val par = course?.holePars?.getOrNull(h - 1) ?: 4
+                                                 val hasDots = playerEarnedDotsOnHole(hScore, par) || hCalc.skinDotsWon > 0
+                                                 GolfScoreBadge(
+                                                     score = hScore.grossScore,
+                                                     par = par,
+                                                     textColor = textPrimary,
+                                                     hasDots = hasDots,
+                                                     modifier = Modifier
+                                                         .align(Alignment.TopStart)
+                                                         .padding(start = 6.dp, top = 4.dp)
+                                                 )
                                                  Text(
-                                                     text = "${hScore.grossScore}/${hScore.netScore}",
+                                                     text = "${hScore.netScore}",
                                                      color = textPrimary,
                                                      fontSize = 15.sp,
                                                      fontWeight = FontWeight.Bold,
-                                                     modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 4.dp)
+                                                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp)
                                                  )
                                                  if (dots > 0) {
                                                      Text(
@@ -702,6 +966,76 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                 }
             }
         }
+    }
+
+    selectedHolePlayerForPopup?.let { (player, hole) ->
+        val par = course?.holePars?.getOrNull(hole - 1) ?: 4
+        val hScore = scores[player.id]?.getOrNull(hole - 1) ?: HoleScore()
+        val dotsBreakdown = getPlayerDotsBreakdown(
+            player = player,
+            h = hole,
+            scores = scores,
+            breakdownMatrix = breakdownMatrix,
+            course = course,
+            teams = teams,
+            useTeams = useTeams,
+            pressHoles = pressHoles
+        )
+        
+        AlertDialog(
+            onDismissRequest = { selectedHolePlayerForPopup = null },
+            title = {
+                Text(
+                    text = "${player.name} — Hole $hole Details",
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 20.sp,
+                    color = textPrimary
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Gross Score: ${hScore.grossScore} (Par $par)  |  Net: ${hScore.netScore}",
+                        fontWeight = FontWeight.Bold,
+                        color = textSecondary,
+                        fontSize = 15.sp
+                    )
+                    Divider(color = textSecondary.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Dots Earned:",
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textPrimary,
+                        fontSize = 16.sp
+                    )
+                    if (dotsBreakdown.isEmpty()) {
+                        Text(
+                            text = "• No dots earned on this hole.",
+                            color = textSecondary,
+                            fontSize = 14.sp
+                        )
+                    } else {
+                        dotsBreakdown.forEach { dot ->
+                            Text(
+                                text = "• $dot",
+                                color = goldColor,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { selectedHolePlayerForPopup = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = GolfGreen)
+                ) {
+                    Text("Close", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = cardBg
+        )
     }
 }
 
@@ -752,13 +1086,14 @@ fun drawScorecardToBitmap(
     course: Course?,
     teams: List<Team>,
     useTeams: Boolean,
-    finalCalculatedJunk: Map<String, Int>
+    finalCalculatedJunk: Map<String, Int>,
+    pressHoles: List<Int>
 ): android.graphics.Bitmap {
     val sdf = java.text.SimpleDateFormat("MMMM dd, yyyy", java.util.Locale.getDefault())
     val currentDate = sdf.format(java.util.Date())
     
     // Calculate the junk dots for each entity and hole
-    val calculationOutput = com.steve.junker.data.models.calculateJunkDots(scores, null, course, teams, useTeams)
+    val calculationOutput = com.steve.junker.data.models.calculateJunkDots(scores, pressHoles, course, teams, useTeams)
     val breakdownMatrix = calculationOutput.holeBreakdowns
     
     // 1. Build the rows data list
@@ -1045,7 +1380,99 @@ fun drawScorecardToBitmap(
             
             val xCenter = currentX + (scoreColWidth / 2)
             
-            if (cell.subText.isNotEmpty()) {
+            val isHoleCol = colIndex in 0..8 || colIndex in 10..18
+            val isPlayerRow = row.type == "PLAYER_SINGLE" || row.type == "PLAYER_SUB"
+            
+            if (isHoleCol && isPlayerRow && cell.mainText != "-") {
+                val hIndex = if (colIndex in 0..8) colIndex else colIndex - 1
+                val par = course?.holePars?.getOrNull(hIndex) ?: 4
+                val parts = cell.mainText.split("/")
+                val g = parts[0].toIntOrNull() ?: 0
+                val n = parts.getOrNull(1)?.toIntOrNull() ?: g
+                val relation = g - par
+                
+                // Find matching player & calculate hasDots
+                val player = if (row.type == "PLAYER_SINGLE") {
+                    players.find { it.name == row.name }
+                } else {
+                    players.find { row.name.endsWith(it.name) }
+                }
+                val playerHoleScores = scores[player?.id] ?: List(18) { HoleScore() }
+                val hScore = playerHoleScores.getOrNull(hIndex) ?: HoleScore()
+                val wonSkin = if (row.type == "PLAYER_SINGLE") {
+                    val hCalc = breakdownMatrix[player?.id]?.getOrNull(hIndex) ?: HoleCalculationResult()
+                    hCalc.skinDotsWon > 0
+                } else {
+                    isPlayerHoleWinnerForTeam(player, hIndex, scores, breakdownMatrix, teams)
+                }
+                val hasDots = playerEarnedDotsOnHole(hScore, par) || wonSkin
+                
+                if (row.type == "PLAYER_SINGLE") {
+                    // Draw diagonal line
+                    canvas.drawLine(
+                        currentX.toFloat(),
+                        (currentY + rowHeight).toFloat(),
+                        (currentX + scoreColWidth).toFloat(),
+                        currentY.toFloat(),
+                        borderPaint
+                    )
+                    
+                    // Draw Gross Score 'g' in top-left
+                    val xG = (currentX + 18).toFloat()
+                    val yG = (currentY + 20).toFloat()
+                    drawBadgeOnCanvas(canvas, xG, yG, 13f, relation, cellPaint)
+                    
+                    val gPaint = android.graphics.Paint(cellPaint).apply { textSize = 15f }
+                    val gStr = g.toString()
+                    val gWidth = gPaint.measureText(gStr)
+                    canvas.drawText(gStr, xG - (gWidth / 2), yG + 5, gPaint)
+                    
+                    // Draw a small dot if dots won
+                    if (hasDots) {
+                        val dotPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#E65100")
+                            style = android.graphics.Paint.Style.FILL
+                            isAntiAlias = true
+                        }
+                        canvas.drawCircle(xG + 19f, yG - 14f, 3f, dotPaint)
+                    }
+                    
+                    // Draw Net Score 'n' in bottom-middle
+                    val xN = (currentX + 38).toFloat()
+                    val yN = (currentY + rowHeight - 16).toFloat()
+                    val nPaint = android.graphics.Paint(cellPaint).apply { textSize = 15f }
+                    val nStr = n.toString()
+                    val nWidth = nPaint.measureText(nStr)
+                    canvas.drawText(nStr, xN - (nWidth / 2), yN, nPaint)
+                    
+                    // Draw dots subtext if any
+                    if (cell.subText.isNotEmpty()) {
+                        cellGoldTextPaint.textSize = 12f
+                        val subWidth = cellGoldTextPaint.measureText(cell.subText)
+                        canvas.drawText(cell.subText, (currentX + scoreColWidth - subWidth - 4).toFloat(), (currentY + rowHeight - 6).toFloat(), cellGoldTextPaint)
+                    }
+                } else {
+                    // PLAYER_SUB: Single centered gross score
+                    val xCenterF = xCenter.toFloat()
+                    val yCenterF = (currentY + 33).toFloat()
+                    drawBadgeOnCanvas(canvas, xCenterF, yCenterF, 16f, relation, cellPaint)
+                    
+                    val gPaint = android.graphics.Paint(cellPaint).apply { textSize = 20f }
+                    val gStr = g.toString()
+                    val gWidth = gPaint.measureText(gStr)
+                    canvas.drawText(gStr, xCenterF - (gWidth / 2), yCenterF + 7, gPaint)
+                    
+                    // Draw a small dot if dots won
+                    if (hasDots) {
+                        val dotPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.parseColor("#E65100")
+                            style = android.graphics.Paint.Style.FILL
+                            isAntiAlias = true
+                        }
+                        canvas.drawCircle(xCenterF + 23f, yCenterF - 20f, 3.5f, dotPaint)
+                    }
+                }
+            } else if (cell.subText.isNotEmpty()) {
                 // Draw diagonal line from bottom-left to top-right of cell
                 canvas.drawLine(
                     currentX.toFloat(),
@@ -1093,4 +1520,254 @@ fun drawScorecardToBitmap(
     canvas.drawLine(drawX, headerY, drawX, headerY + ((rows.size + 1) * rowHeight), borderPaint)
     
     return bitmap
+}
+
+@Composable
+fun GolfScoreBadge(
+    score: Int,
+    par: Int,
+    textColor: Color,
+    hasDots: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val relation = score - par
+    Box(
+        modifier = modifier.size(36.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (score > 0) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val badgeColor = textColor
+                val strokeWidth = 3f
+                val badgeSize = 32.dp.toPx()
+                val center = this.center
+
+                if (hasDots) {
+                    drawCircle(
+                        color = Color(0xFFFFB300),
+                        radius = 2.5f.dp.toPx(),
+                        center = androidx.compose.ui.geometry.Offset(x = this.size.width - 2.dp.toPx(), y = 2.dp.toPx())
+                    )
+                }
+
+                when {
+                    relation == -1 -> {
+                        // Birdie: Single Circle
+                        drawCircle(
+                            color = badgeColor,
+                            radius = badgeSize / 2f - 2.dp.toPx(),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+                        )
+                    }
+                    relation <= -2 -> {
+                        // Eagle: Double Circle
+                        drawCircle(
+                            color = badgeColor,
+                            radius = badgeSize / 2f - 2.dp.toPx(),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+                        )
+                        drawCircle(
+                            color = badgeColor,
+                            radius = badgeSize / 2f - 6.dp.toPx(),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+                        )
+                    }
+                    relation == 1 -> {
+                        // Bogey: Single Square
+                        val rectSize = badgeSize - 4.dp.toPx()
+                        drawRect(
+                            color = badgeColor,
+                            topLeft = androidx.compose.ui.geometry.Offset(center.x - rectSize/2f, center.y - rectSize/2f),
+                            size = androidx.compose.ui.geometry.Size(rectSize, rectSize),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+                        )
+                    }
+                    relation >= 2 -> {
+                        // Double Bogey or worse: Double Square
+                        val rectSize1 = badgeSize - 4.dp.toPx()
+                        drawRect(
+                            color = badgeColor,
+                            topLeft = androidx.compose.ui.geometry.Offset(center.x - rectSize1/2f, center.y - rectSize1/2f),
+                            size = androidx.compose.ui.geometry.Size(rectSize1, rectSize1),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+                        )
+                        val rectSize2 = badgeSize - 12.dp.toPx()
+                        drawRect(
+                            color = badgeColor,
+                            topLeft = androidx.compose.ui.geometry.Offset(center.x - rectSize2/2f, center.y - rectSize2/2f),
+                            size = androidx.compose.ui.geometry.Size(rectSize2, rectSize2),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeWidth)
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "$score",
+                color = textColor,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        } else {
+            Text("-", color = Color.Gray, fontSize = 16.sp)
+        }
+    }
+}
+
+fun drawBadgeOnCanvas(
+    canvas: android.graphics.Canvas,
+    x: Float,
+    y: Float,
+    r: Float,
+    relation: Int,
+    basePaint: android.graphics.Paint
+) {
+    val badgePaint = android.graphics.Paint().apply {
+        color = basePaint.color
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+    when {
+        relation == -1 -> {
+            // Birdie: Single Circle
+            canvas.drawCircle(x, y - 1, r, badgePaint)
+        }
+        relation <= -2 -> {
+            // Eagle: Double Circle
+            canvas.drawCircle(x, y - 1, r, badgePaint)
+            canvas.drawCircle(x, y - 1, r - 3.5f, badgePaint)
+        }
+        relation == 1 -> {
+            // Bogey: Single Square
+            canvas.drawRect(x - r, y - r - 1, x + r, y + r - 1, badgePaint)
+        }
+        relation >= 2 -> {
+            // Double Bogey or worse: Double Square
+            canvas.drawRect(x - r, y - r - 1, x + r, y + r - 1, badgePaint)
+            canvas.drawRect(x - r + 3.5f, y - r - 1 + 3.5f, x + r - 3.5f, y + r - 1 - 3.5f, badgePaint)
+        }
+    }
+}
+
+fun getPlayerDotsBreakdown(
+    player: Player,
+    h: Int,
+    scores: Map<String, List<HoleScore>>,
+    breakdownMatrix: Map<String, List<HoleCalculationResult>>,
+    course: Course?,
+    teams: List<Team>,
+    useTeams: Boolean,
+    pressHoles: List<Int>
+): List<String> {
+    val dotsList = mutableListOf<String>()
+    val par = course?.holePars?.getOrNull(h - 1) ?: 4
+    val playerHoleScore = scores[player.id]?.getOrNull(h - 1) ?: HoleScore()
+    if (playerHoleScore.grossScore <= 0) return emptyList()
+
+    val multiplier = if (pressHoles.isEmpty()) 1 else {
+        var m = 1
+        pressHoles.sorted().forEach { pHole ->
+            if (h >= pHole) m *= 2
+        }
+        m
+    }
+
+    if (useTeams && teams.isNotEmpty()) {
+        val team = teams.find { it.playerIds.contains(player.id) }
+        val wonSkin = if (team != null) {
+            isPlayerHoleWinnerForTeam(player, h - 1, scores, breakdownMatrix, teams)
+        } else false
+        
+        if (wonSkin) {
+            val teamCalc = breakdownMatrix[team?.id]?.getOrNull(h - 1) ?: HoleCalculationResult()
+            dotsList.add("Skins (Hole Won): +${teamCalc.skinDotsWon} dot${if (teamCalc.skinDotsWon > 1) "s" else ""}")
+        }
+        if (par == 3 && playerHoleScore.hasCtp) {
+            val ownerId = team?.id ?: player.id
+            val hCalc = breakdownMatrix[ownerId]?.getOrNull(h - 1) ?: HoleCalculationResult()
+            if (hCalc.ctpDotsWon > 0) {
+                dotsList.add("Closest to the Pin (CTP): +${hCalc.ctpDotsWon} dot${if (hCalc.ctpDotsWon > 1) "s" else ""}")
+            }
+        }
+        
+        val scoreRelationToPar = playerHoleScore.grossScore - par
+        if (scoreRelationToPar == -1) {
+            dotsList.add("Birdie: +${2 * multiplier} dots")
+        } else if (scoreRelationToPar <= -2) {
+            dotsList.add("Eagle or Better: +${5 * multiplier} dots")
+        }
+        
+        val madeParOrBetter = playerHoleScore.grossScore <= par
+        if (madeParOrBetter) {
+            if (playerHoleScore.hasDrive) dotsList.add("Drive: +${1 * multiplier} dot")
+            if (playerHoleScore.hasSandy) dotsList.add("Sandy: +${1 * multiplier} dot")
+            if (playerHoleScore.hasJacques) dotsList.add("Jacques: +${1 * multiplier} dot")
+            if (playerHoleScore.hasLostBoy) dotsList.add("Lost Boy: +${1 * multiplier} dot")
+        }
+        if (playerHoleScore.hasPoley) dotsList.add("Poley: +${1 * multiplier} dot")
+        if (playerHoleScore.hasDoublePoley) dotsList.add("Double Poley: +${2 * multiplier} dots")
+    } else {
+        // Individual mode
+        val hCalc = breakdownMatrix[player.id]?.getOrNull(h - 1) ?: HoleCalculationResult()
+        
+        if (hCalc.skinDotsWon > 0) {
+            dotsList.add("Skins (Hole Won): +${hCalc.skinDotsWon} dot${if (hCalc.skinDotsWon > 1) "s" else ""}")
+        }
+        if (par == 3 && playerHoleScore.hasCtp && hCalc.ctpDotsWon > 0) {
+            dotsList.add("Closest to the Pin (CTP): +${hCalc.ctpDotsWon} dot${if (hCalc.ctpDotsWon > 1) "s" else ""}")
+        }
+        
+        val scoreRelationToPar = playerHoleScore.grossScore - par
+        if (scoreRelationToPar == -1) {
+            dotsList.add("Birdie: +${2 * multiplier} dots")
+        } else if (scoreRelationToPar <= -2) {
+            dotsList.add("Eagle or Better: +${5 * multiplier} dots")
+        }
+        
+        val madeParOrBetter = playerHoleScore.grossScore <= par
+        if (madeParOrBetter) {
+            if (playerHoleScore.hasDrive) dotsList.add("Drive: +${1 * multiplier} dot")
+            if (playerHoleScore.hasSandy) dotsList.add("Sandy: +${1 * multiplier} dot")
+            if (playerHoleScore.hasJacques) dotsList.add("Jacques: +${1 * multiplier} dot")
+            if (playerHoleScore.hasLostBoy) dotsList.add("Lost Boy: +${1 * multiplier} dot")
+        }
+        if (playerHoleScore.hasPoley) dotsList.add("Poley: +${1 * multiplier} dot")
+        if (playerHoleScore.hasDoublePoley) dotsList.add("Double Poley: +${2 * multiplier} dots")
+    }
+
+    return dotsList
+}
+
+fun playerEarnedDotsOnHole(hScore: HoleScore, par: Int): Boolean {
+    if (hScore.grossScore <= 0) return false
+    val scoreRelationToPar = hScore.grossScore - par
+    if (scoreRelationToPar < 0) return true // Birdie/Eagle
+    if (hScore.hasPoley || hScore.hasDoublePoley) return true
+    
+    val madeParOrBetter = hScore.grossScore <= par
+    if (madeParOrBetter && (hScore.hasDrive || hScore.hasSandy || hScore.hasJacques || hScore.hasLostBoy)) return true
+    if (par == 3 && hScore.hasCtp) return true
+    return false
+}
+
+fun isPlayerHoleWinnerForTeam(
+    player: Player?,
+    hIndex: Int,
+    scores: Map<String, List<HoleScore>>,
+    breakdownMatrix: Map<String, List<HoleCalculationResult>>,
+    teams: List<Team>
+): Boolean {
+    if (player == null) return false
+    val team = teams.find { it.playerIds.contains(player.id) } ?: return false
+    val teamCalc = breakdownMatrix[team.id]?.getOrNull(hIndex) ?: HoleCalculationResult()
+    if (teamCalc.skinDotsWon <= 0) return false
+    
+    val teamPlayersHoleScores = team.playerIds.map { pId ->
+        pId to (scores[pId]?.getOrNull(hIndex)?.netScore ?: Int.MAX_VALUE)
+    }.filter { (scores[it.first]?.getOrNull(hIndex)?.grossScore ?: 0) > 0 }
+    
+    if (teamPlayersHoleScores.isEmpty()) return false
+    val minNet = teamPlayersHoleScores.map { it.second }.minOrNull() ?: Int.MAX_VALUE
+    val playerHoleScore = scores[player.id]?.getOrNull(hIndex) ?: HoleScore()
+    return playerHoleScore.grossScore > 0 && playerHoleScore.netScore == minNet
 }

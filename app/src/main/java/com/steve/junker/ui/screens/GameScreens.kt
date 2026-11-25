@@ -74,12 +74,17 @@ fun PlayerSetupScreen(
     var newPlayerHandicap by remember { mutableStateOf("") }
     
     val savedPlayers by viewModel.savedPlayers.collectAsState()
+    val isPlayersLoading by viewModel.isPlayersLoading.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useTeams by viewModel.useTeams.collectAsState()
     
     val activeFoursome = remember { mutableStateListOf<Player>() }
     var errorMessage by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshPlayers()
+    }
 
     val appBg = getAppBg(isDarkMode)
     val cardBg = getCardBg(isDarkMode)
@@ -177,24 +182,62 @@ fun PlayerSetupScreen(
                 }
             }
 
-            Text("Saved Directory Profiles:", style = MaterialTheme.typography.titleSmall, color = textSecondary)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Saved Directory Profiles:", style = MaterialTheme.typography.titleSmall, color = textSecondary)
+                    if (isPlayersLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = GolfGreen)
+                    }
+                }
+                IconButton(
+                    onClick = { viewModel.refreshPlayers() },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Text("🔄", fontSize = 14.sp)
+                }
+            }
             
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(savedPlayers) { player ->
-                    val isSelected = activeFoursome.any { it.id == player.id }
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = if (isSelected) (if (isDarkMode) Color(0xFF2E2E2E) else Color(0xFFE0E0E0)) else cardBg),
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
-                            if (isSelected) activeFoursome.removeAll { it.id == player.id }
-                            else if (activeFoursome.size < 4) activeFoursome.add(player)
+            if (savedPlayers.isEmpty()) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isPlayersLoading) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = GolfGreen)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text("Loading players directory...", color = textSecondary, fontSize = 14.sp)
                         }
-                    ) {
-                        Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
-                                Text(player.name, style = MaterialTheme.typography.titleMedium, color = textPrimary)
-                                Text("Handicap: ${player.handicap}", style = MaterialTheme.typography.bodySmall, color = textSecondary)
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                            Text("No players found in directory", color = textPrimary, fontWeight = FontWeight.SemiBold)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("Create a new player above or tap 🔄 to reload.", color = textSecondary, fontSize = 13.sp)
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(savedPlayers) { player ->
+                        val isSelected = activeFoursome.any { it.id == player.id }
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = if (isSelected) (if (isDarkMode) Color(0xFF2E2E2E) else Color(0xFFE0E0E0)) else cardBg),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                                if (isSelected) activeFoursome.removeAll { it.id == player.id }
+                                else if (activeFoursome.size < 4) activeFoursome.add(player)
                             }
-                            IconButton(onClick = { viewModel.deletePlayerFromDb(player) }) { Text("✕", color = Color.Red, fontWeight = FontWeight.Bold) }
+                        ) {
+                            Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column {
+                                    Text(player.name, style = MaterialTheme.typography.titleMedium, color = textPrimary)
+                                    Text("Handicap: ${player.handicap}", style = MaterialTheme.typography.bodySmall, color = textSecondary)
+                                }
+                                IconButton(onClick = { viewModel.deletePlayerFromDb(player) }) { Text("✕", color = Color.Red, fontWeight = FontWeight.Bold) }
+                            }
                         }
                     }
                 }
@@ -238,11 +281,16 @@ fun CourseSetupScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onCours
     val holePars = remember { mutableStateListOf(*Array(18) { "4" }) }
     
     val savedCourses by viewModel.savedCourses.collectAsState()
+    val isCoursesLoading by viewModel.isCoursesLoading.collectAsState()
     val apiSearchResults by viewModel.apiSearchResults.collectAsState()
     val isApiLoading by viewModel.isApiLoading.collectAsState()
     val apiErrorMessage by viewModel.apiErrorMessage.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     var localErrorMessage by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshCourses()
+    }
 
     val appBg = getAppBg(isDarkMode)
     val cardBg = getCardBg(isDarkMode)
@@ -315,7 +363,12 @@ fun CourseSetupScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onCours
 
             item {
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("Select a Locally Saved Course:", style = MaterialTheme.typography.titleMedium, color = goldColor)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Select a Locally Saved Course:", style = MaterialTheme.typography.titleMedium, color = goldColor)
+                    if (isCoursesLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = GolfGreen)
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
@@ -391,11 +444,12 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     val currentHole by viewModel.currentHole.collectAsState()
     val players by viewModel.activePlayers.collectAsState()
     val scores by viewModel.scores.collectAsState()
-    val pressHole by viewModel.pressHole.collectAsState()
+    val pressHoles by viewModel.pressHoles.collectAsState()
     val course by viewModel.selectedCourse.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useTeams by viewModel.useTeams.collectAsState()
     val teams by viewModel.teams.collectAsState()
+    val isRoundLocked by viewModel.isRoundLocked.collectAsState()
     
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -409,7 +463,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     val goldColor = getGoldThemeColor(isDarkMode)
 
     val triggerAutoSave: () -> Unit = {
-        val calculatedMatrix = calculateJunkDots(scores, pressHole, course, teams, useTeams)
+        val calculatedMatrix = calculateJunkDots(scores, pressHoles, course, teams, useTeams)
         viewModel.archiveCurrentRound(calculatedMatrix.entityTotals)
     }
 
@@ -454,17 +508,47 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (pressHole != null && currentHole >= pressHole!!) {
+            val currentMultiplier = if (pressHoles.isEmpty()) 1 else {
+                var m = 1
+                pressHoles.sorted().forEach { pHole ->
+                    if (currentHole >= pHole) m *= 2
+                }
+                m
+            }
+
+            if (pressHoles.contains(currentHole)) {
                 Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFD32F2F)), modifier = Modifier.fillMaxWidth()) {
-                    Text("🔴 PRESS ACTIVE - DOTS DOUBLE", color = Color.White, modifier = Modifier.padding(12.dp), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Text("🔴 PRESS CALLED ON THIS HOLE (x$currentMultiplier)", color = Color.White, modifier = Modifier.padding(12.dp), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
             } else {
-                Button(
-                    onClick = { viewModel.callPress(currentHole); triggerAutoSave() }, 
-                    colors = ButtonDefaults.buttonColors(containerColor = goldColor), 
-                    modifier = Modifier.fillMaxWidth().height(44.dp)
-                ) {
-                    Text("Call Press Match", color = if (isDarkMode) Color.Black else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                val hasPressActive = pressHoles.isNotEmpty()
+                val isBeforeFirstPress = hasPressActive && currentHole < pressHoles.min()
+                
+                if (isBeforeFirstPress) {
+                    // Disabled "until the hole where it was activated"
+                    Button(
+                        onClick = {},
+                        enabled = false,
+                        colors = ButtonDefaults.buttonColors(containerColor = goldColor.copy(alpha = 0.5f), disabledContainerColor = goldColor.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth().height(44.dp)
+                    ) {
+                        Text("Call Press Match", color = if (isDarkMode) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                    }
+                } else {
+                    if (currentMultiplier > 1) {
+                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE65100)), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                            Text("🔥 PRESS ACTIVE — DOTS MULTIPLIER: x$currentMultiplier", color = Color.White, modifier = Modifier.fillMaxWidth().padding(8.dp), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        }
+                    }
+                    Button(
+                        onClick = { viewModel.callPress(currentHole); triggerAutoSave() }, 
+                        enabled = !isRoundLocked,
+                        colors = ButtonDefaults.buttonColors(containerColor = goldColor, disabledContainerColor = goldColor.copy(alpha = 0.5f)), 
+                        modifier = Modifier.fillMaxWidth().height(44.dp)
+                    ) {
+                        val btnText = if (currentMultiplier > 1) "Call Additional Press (x${currentMultiplier * 2})" else "Call Press Match"
+                        Text(btnText, color = if (isDarkMode) Color.Black else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                    }
                 }
             }
 
@@ -483,7 +567,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                             if (player != null) {
                                 val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                                 val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, { 
+                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, { 
                                     viewModel.updateGrossScore(player.id, currentHole, it)
                                     triggerAutoSave() 
                                 }, { 
@@ -497,7 +581,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                     items(players) { player ->
                         val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                         val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, { 
+                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, { 
                             viewModel.updateGrossScore(player.id, currentHole, it)
                             triggerAutoSave()
                         }, { 
@@ -524,6 +608,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
 @Composable
 fun PlayerScoreRow(
     player: Player, holeScore: HoleScore, holePar: Int, isDarkMode: Boolean,
+    enabled: Boolean,
     onGrossChange: (Int) -> Unit, onDotToggle: (String) -> Unit
 ) {
     val cardBg = getCardBg(isDarkMode)
@@ -549,7 +634,13 @@ fun PlayerScoreRow(
                         val isSelected = holeScore.grossScore == scoreOption
                         OutlinedButton(
                             onClick = { onGrossChange(scoreOption) },
-                            colors = ButtonDefaults.outlinedButtonColors(containerColor = if (isSelected) GolfGreen else Color.Transparent, contentColor = if (isSelected) Color.White else textPrimary),
+                            enabled = enabled,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = if (isSelected) GolfGreen else Color.Transparent, 
+                                contentColor = if (isSelected) Color.White else textPrimary,
+                                disabledContainerColor = if (isSelected) GolfGreen.copy(alpha = 0.5f) else Color.Transparent,
+                                disabledContentColor = if (isSelected) Color.White.copy(alpha = 0.5f) else textPrimary.copy(alpha = 0.5f)
+                            ),
                             border = BorderStroke(1.5.dp, if (isSelected) GolfGreen else textSecondary.copy(alpha = 0.6f)),
                             modifier = Modifier.size(width = 46.dp, height = 42.dp),
                             contentPadding = PaddingValues(0.dp)
@@ -562,19 +653,19 @@ fun PlayerScoreRow(
                 Text("Select Side Junk Dots:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textSecondary)
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Drive", holeScore.hasDrive, textPrimary) { onDotToggle("hasDrive") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Sandy", holeScore.hasSandy, textPrimary) { onDotToggle("hasSandy") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Poley", holeScore.hasPoley, textPrimary) { onDotToggle("hasPoley") } }
+                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Drive", holeScore.hasDrive, textPrimary, enabled) { onDotToggle("hasDrive") } }
+                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Sandy", holeScore.hasSandy, textPrimary, enabled) { onDotToggle("hasSandy") } }
+                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Poley", holeScore.hasPoley, textPrimary, enabled) { onDotToggle("hasPoley") } }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Dbl Poley", holeScore.hasDoublePoley, textPrimary) { onDotToggle("hasDoublePoley") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Jacques", holeScore.hasJacques, textPrimary) { onDotToggle("hasJacques") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("LostBoy", holeScore.hasLostBoy, textPrimary) { onDotToggle("hasLostBoy") } }
+                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Dbl Poley", holeScore.hasDoublePoley, textPrimary, enabled) { onDotToggle("hasDoublePoley") } }
+                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Jacques", holeScore.hasJacques, textPrimary, enabled) { onDotToggle("hasJacques") } }
+                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("LostBoy", holeScore.hasLostBoy, textPrimary, enabled) { onDotToggle("hasLostBoy") } }
                 }
                 if (holePar == 3) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                        DotCheckbox("🔴 CTP (Closest to Pin)", holeScore.hasCtp, textPrimary) { onDotToggle("hasCtp") }
+                        DotCheckbox("🔴 CTP (Closest to Pin)", holeScore.hasCtp, textPrimary, enabled) { onDotToggle("hasCtp") }
                     }
                 }
             }
@@ -583,15 +674,16 @@ fun PlayerScoreRow(
 }
 
 @Composable
-fun DotCheckbox(label: String, checked: Boolean, textPrimary: Color, onCheckedChange: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onCheckedChange() }.padding(vertical = 2.dp)) {
+fun DotCheckbox(label: String, checked: Boolean, textPrimary: Color, enabled: Boolean, onCheckedChange: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable(enabled = enabled) { onCheckedChange() }.padding(vertical = 2.dp)) {
         Checkbox(
             checked = checked, 
-            onCheckedChange = { onCheckedChange() }, 
+            onCheckedChange = { if (enabled) onCheckedChange() }, 
+            enabled = enabled,
             modifier = Modifier.size(24.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
-        Text(label, color = textPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (enabled) textPrimary else textPrimary.copy(alpha = 0.5f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
 }
 
