@@ -1,5 +1,10 @@
 package com.steve.junker.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -10,17 +15,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import com.steve.junker.data.models.GameType
 import com.steve.junker.data.models.HoleScore
@@ -30,6 +39,9 @@ import com.steve.junker.data.models.Team
 import com.steve.junker.ui.viewmodel.GameViewModel
 import com.steve.junker.data.models.calculateJunkDots
 import com.steve.junker.data.models.calculateNinesPoints
+import com.steve.junker.voice.OfflineSpeechHelper
+import com.steve.junker.voice.VoiceParseResult
+import com.steve.junker.voice.parseGolfTranscript
 import com.steve.junker.DrawerHeaderBar
 
 val GolfGreen = Color(0xFF1B5E20)
@@ -81,6 +93,14 @@ fun PlayerSetupScreen(
     val useTeams by viewModel.useTeams.collectAsState()
     val gameType by viewModel.gameType.collectAsState()
     val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
+    val pointValue by viewModel.pointValue.collectAsState()
+    var customPointValueText by remember {
+        mutableStateOf(
+            if (pointValue == 0.0) "0"
+            else if (pointValue == pointValue.toLong().toDouble()) pointValue.toLong().toString()
+            else String.format(java.util.Locale.US, "%.2f", pointValue)
+        )
+    }
     
     val activeFoursome = remember { mutableStateListOf<Player>() }
     var errorMessage by remember { mutableStateOf("") }
@@ -162,6 +182,56 @@ fun PlayerSetupScreen(
                     Checkbox(checked = isBlitzEnabled, onCheckedChange = { viewModel.setBlitzEnabled(it) })
                     Text("Enable Blitz Variant (2+ stroke win takes all points)", color = textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Point / Dot Value ($) Selector
+            Text("Point / Dot Value ($)", style = MaterialTheme.typography.titleSmall, color = textSecondary)
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val presets = listOf(0.0 to "$0", 0.5 to "$0.50", 1.0 to "$1", 2.0 to "$2", 5.0 to "$5")
+                presets.forEach { (presetVal, label) ->
+                    val isSelected = kotlin.math.abs(pointValue - presetVal) < 0.001
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.setPointValue(presetVal)
+                            customPointValueText = if (presetVal == 0.0) "0" else if (presetVal == presetVal.toLong().toDouble()) presetVal.toLong().toString() else String.format(java.util.Locale.US, "%.2f", presetVal)
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isSelected) GolfGreen else Color.Transparent,
+                            contentColor = if (isSelected) Color.White else textPrimary
+                        ),
+                        border = BorderStroke(1.dp, if (isSelected) GolfGreen else Color.Gray),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        modifier = Modifier.weight(1f).height(38.dp)
+                    ) {
+                        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                OutlinedTextField(
+                    value = customPointValueText,
+                    onValueChange = { raw ->
+                        val cleaned = raw.filter { it.isDigit() || it == '.' }
+                        if (cleaned.count { it == '.' } <= 1) {
+                            customPointValueText = cleaned
+                            cleaned.toDoubleOrNull()?.let { viewModel.setPointValue(it) }
+                        }
+                    },
+                    label = { Text("$", fontSize = 11.sp) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.width(74.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = GolfGreen,
+                        unfocusedBorderColor = Color.Gray,
+                        focusedTextColor = textPrimary,
+                        unfocusedTextColor = textPrimary
+                    )
+                )
             }
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -328,7 +398,8 @@ fun PlayerSetupScreen(
                             matchInTeamMode = effectiveUseTeams,
                             activeTeamsList = builtTeamsList,
                             gameType = gameType,
-                            isBlitzEnabled = if (gameType == GameType.NINES) isBlitzEnabled else false
+                            isBlitzEnabled = if (gameType == GameType.NINES) isBlitzEnabled else false,
+                            pointValue = pointValue
                         )
                         onSetupComplete()
                     }
@@ -509,6 +580,7 @@ fun CourseSetupScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onCours
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigateToLeaderboard: () -> Unit) {
     val currentHole by viewModel.currentHole.collectAsState()
@@ -525,6 +597,44 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    val latestHole by rememberUpdatedState(currentHole)
+    val latestPlayers by rememberUpdatedState(players)
+    var pendingVoiceResult by remember { mutableStateOf<VoiceParseResult?>(null) }
+
+    val speechHelper = remember {
+        OfflineSpeechHelper(context) { transcript ->
+            pendingVoiceResult = parseGolfTranscript(transcript, latestHole, latestPlayers)
+        }
+    }
+
+    val isListening by speechHelper.isListening.collectAsState()
+    val partialTranscript by speechHelper.partialTranscript.collectAsState()
+    val speechError by speechHelper.errorMessage.collectAsState()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            speechHelper.startListening(latestPlayers.map { it.name })
+        } else {
+            Toast.makeText(context, "Microphone permission is required for voice scoring.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val startVoiceCapture: () -> Unit = {
+        val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (hasPerm) {
+            speechHelper.startListening(latestPlayers.map { it.name })
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { speechHelper.destroy() }
+    }
 
     val holePar = course?.holePars?.getOrNull(currentHole - 1) ?: 4
     val holeHcp = course?.holeHandicaps?.getOrNull(currentHole - 1) ?: 18
@@ -583,7 +693,60 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                 Spacer(modifier = Modifier.width(56.dp))
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (isListening) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = GolfGreen.copy(alpha = 0.15f)),
+                    border = BorderStroke(1.5.dp, GolfGreen),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("🎤 Listening...", color = GolfGreen, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                            TextButton(onClick = { speechHelper.stopListening() }) {
+                                Text("Done / Cancel", color = Color.Red, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                        if (partialTranscript.isNotBlank()) {
+                            Text(
+                                text = "\"$partialTranscript\"",
+                                color = textPrimary,
+                                fontStyle = FontStyle.Italic,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            } else {
+                Button(
+                    onClick = startVoiceCapture,
+                    enabled = !isRoundLocked,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isDarkMode) Color(0xFF263238) else Color(0xFFE8F5E9),
+                        contentColor = if (isDarkMode) GoldAccent else GolfGreen,
+                        disabledContainerColor = Color.Gray.copy(alpha = 0.2f)
+                    ),
+                    border = BorderStroke(1.dp, if (isRoundLocked) Color.Gray else GolfGreen),
+                    modifier = Modifier.fillMaxWidth().height(44.dp).padding(bottom = 0.dp)
+                ) {
+                    Text("🎤 Speak Scores", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                }
+                if (!speechError.isNullOrBlank()) {
+                    Text(
+                        text = speechError!!,
+                        color = Color.Red,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
 
             if (gameType == GameType.RAW_JUNKER) {
                 val currentMultiplier = if (pressHoles.isEmpty()) 1 else {
@@ -682,6 +845,155 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
             }
         }
     }
+
+    pendingVoiceResult?.let { result ->
+        ModalBottomSheet(
+            onDismissRequest = { pendingVoiceResult = null },
+            containerColor = getCardBg(isDarkMode)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Proposed Updates for Hole ${result.targetHole}",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = textPrimary
+                )
+                Text(
+                    text = "\"${result.rawTranscript}\"",
+                    fontSize = 13.sp,
+                    fontStyle = FontStyle.Italic,
+                    color = textSecondary
+                )
+                HorizontalDivider(color = textSecondary.copy(alpha = 0.25f))
+
+                if (!result.isValid) {
+                    Text(
+                        text = "Could not recognize any player scores or junk dots. Try saying: 'Mark 5, Steve 4, Keith double poley'",
+                        color = Color.Red,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { pendingVoiceResult = null },
+                            modifier = Modifier.weight(1f).height(48.dp)
+                        ) {
+                            Text("Cancel", color = textPrimary, fontWeight = FontWeight.Bold)
+                        }
+                        Button(
+                            onClick = {
+                                pendingVoiceResult = null
+                                startVoiceCapture()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = GolfGreen),
+                            modifier = Modifier.weight(1f).height(48.dp)
+                        ) {
+                            Text("Try Again", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                } else {
+                    result.updates.forEach { update ->
+                        val visibleDots = if (gameType == GameType.NINES) emptySet() else update.junkDots
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = appBg),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = update.playerName,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = textPrimary
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (update.grossScore != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .background(GolfGreen, RoundedCornerShape(6.dp))
+                                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = "Score: ${update.grossScore}",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
+                                    }
+                                    visibleDots.forEach { dot ->
+                                        Box(
+                                            modifier = Modifier
+                                                .background(goldColor.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
+                                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = formatDotLabel(dot),
+                                                color = goldColor,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { pendingVoiceResult = null },
+                            modifier = Modifier.weight(1f).height(50.dp)
+                        ) {
+                            Text("Cancel", color = textPrimary, fontWeight = FontWeight.Bold)
+                        }
+                        Button(
+                            onClick = {
+                                viewModel.applyVoiceBatch(result) {
+                                    coroutineScope.launch { listState.scrollToItem(0) }
+                                }
+                                pendingVoiceResult = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = GolfGreen),
+                            modifier = Modifier.weight(1f).height(50.dp)
+                        ) {
+                            Text("Apply to Scorecard", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatDotLabel(dotKey: String): String = when (dotKey) {
+    "hasDrive" -> "Drive"
+    "hasSandy" -> "Sandy"
+    "hasDoubleSandy" -> "Dbl Sandy"
+    "hasPoley" -> "Poley"
+    "hasDoublePoley" -> "Dbl Poley"
+    "hasJacques" -> "Jacques"
+    "hasLostBoy" -> "Lost Boy"
+    "hasCtp" -> "CTP"
+    else -> dotKey
 }
 
 @Composable
@@ -736,17 +1048,19 @@ fun PlayerScoreRow(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Box(modifier = Modifier.weight(1f)) { DotCheckbox("Drive", holeScore.hasDrive, textPrimary, enabled) { onDotToggle("hasDrive") } }
                         Box(modifier = Modifier.weight(1f)) { DotCheckbox("Sandy", holeScore.hasSandy, textPrimary, enabled) { onDotToggle("hasSandy") } }
-                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Poley", holeScore.hasPoley, textPrimary, enabled) { onDotToggle("hasPoley") } }
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Dbl Sandy", holeScore.hasDoubleSandy, textPrimary, enabled) { onDotToggle("hasDoubleSandy") } }
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Poley", holeScore.hasPoley, textPrimary, enabled) { onDotToggle("hasPoley") } }
                         Box(modifier = Modifier.weight(1f)) { DotCheckbox("Dbl Poley", holeScore.hasDoublePoley, textPrimary, enabled) { onDotToggle("hasDoublePoley") } }
                         Box(modifier = Modifier.weight(1f)) { DotCheckbox("Jacques", holeScore.hasJacques, textPrimary, enabled) { onDotToggle("hasJacques") } }
-                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("LostBoy", holeScore.hasLostBoy, textPrimary, enabled) { onDotToggle("hasLostBoy") } }
                     }
-                    if (holePar == 3) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                            DotCheckbox("🔴 CTP (Closest to Pin)", holeScore.hasCtp, textPrimary, enabled) { onDotToggle("hasCtp") }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("LostBoy", holeScore.hasLostBoy, textPrimary, enabled) { onDotToggle("hasLostBoy") } }
+                        if (holePar == 3) {
+                            Box(modifier = Modifier.weight(2f)) { DotCheckbox("🔴 CTP (Closest to Pin)", holeScore.hasCtp, textPrimary, enabled) { onDotToggle("hasCtp") } }
+                        } else {
+                            Spacer(modifier = Modifier.weight(2f))
                         }
                     }
                 }

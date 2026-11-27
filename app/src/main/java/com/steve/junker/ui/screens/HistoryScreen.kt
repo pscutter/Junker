@@ -83,34 +83,51 @@ fun MatchHistoryScreen(
                                     }
                                 }
                                 
-                                val (roundGameType, isLocked) = try {
+                                val (roundGameType, roundPointValue, isLocked) = try {
                                     val root = org.json.JSONObject(round.rawScoresJson)
                                     val gTypeStr = root.optString("gameType", round.gameType.name)
                                     val parsedType = runCatching { com.steve.junker.data.models.GameType.valueOf(gTypeStr) }
                                         .getOrDefault(com.steve.junker.data.models.GameType.RAW_JUNKER)
+                                    val parsedPointValue = root.optDouble("pointValue", 0.0).takeIf { !it.isNaN() } ?: 0.0
                                     val creator = root.optString("creatorDeviceId", "")
                                     val isLockedFlag = root.optBoolean("isLocked", false)
                                     val currentDevice = viewModel.getCurrentDeviceId()
                                     val unauthorized = creator.isNotEmpty() && creator != currentDevice
-                                    parsedType to (isLockedFlag || unauthorized)
+                                    Triple(parsedType, parsedPointValue, (isLockedFlag || unauthorized))
                                 } catch (e: Exception) {
-                                    round.gameType to false
+                                    Triple(round.gameType, 0.0, false)
                                 }
 
                                 val formatLabel = if (roundGameType == com.steve.junker.data.models.GameType.NINES) "Format: Nines" else "Format: Raw Junker"
-                                Text(
-                                    text = formatLabel,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (roundGameType == com.steve.junker.data.models.GameType.NINES) goldColor else textSecondary,
-                                    modifier = Modifier
-                                        .padding(top = 4.dp)
-                                        .background(
-                                            if (roundGameType == com.steve.junker.data.models.GameType.NINES) goldColor.copy(alpha = 0.15f)
-                                            else textSecondary.copy(alpha = 0.12f)
+                                Row(
+                                    modifier = Modifier.padding(top = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = formatLabel,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (roundGameType == com.steve.junker.data.models.GameType.NINES) goldColor else textSecondary,
+                                        modifier = Modifier
+                                            .background(
+                                                if (roundGameType == com.steve.junker.data.models.GameType.NINES) goldColor.copy(alpha = 0.15f)
+                                                else textSecondary.copy(alpha = 0.12f)
+                                            )
+                                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                    if (roundPointValue > 0.0) {
+                                        Text(
+                                            text = "💵 $${String.format(Locale.US, "%.2f", roundPointValue)}/pt",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = GolfGreen,
+                                            modifier = Modifier
+                                                .background(GolfGreen.copy(alpha = 0.15f))
+                                                .padding(horizontal = 8.dp, vertical = 2.dp)
                                         )
-                                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                                )
+                                    }
+                                }
                                 
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Divider(color = textSecondary.copy(alpha = 0.3f))

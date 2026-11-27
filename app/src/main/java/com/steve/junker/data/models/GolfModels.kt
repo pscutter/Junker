@@ -20,6 +20,7 @@ data class HoleScore(
     val netScore: Int = 0,
     val hasDrive: Boolean = false,
     val hasSandy: Boolean = false,
+    val hasDoubleSandy: Boolean = false,
     val hasPoley: Boolean = false,
     val hasDoublePoley: Boolean = false,
     val hasLostBoy: Boolean = false,
@@ -95,6 +96,7 @@ fun calculateJunkDots(
                 var dotsOnHole = 0
                 if (hScore.hasPoley) dotsOnHole += 1
                 if (hScore.hasDoublePoley) dotsOnHole += 2
+                if (hScore.hasDoubleSandy) dotsOnHole += 2
                 
                 val scoreRelationToPar = hScore.grossScore - holePar
                 if (scoreRelationToPar == -1) dotsOnHole += 2
