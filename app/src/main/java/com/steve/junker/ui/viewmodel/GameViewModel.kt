@@ -17,7 +17,10 @@ import com.steve.junker.data.models.GameType
 import com.steve.junker.data.models.HoleScore
 import com.steve.junker.data.models.Player
 import com.steve.junker.data.models.Team
+import com.steve.junker.data.models.calculateJunkDots
+import com.steve.junker.data.models.calculateNinesPoints
 import com.steve.junker.data.repository.JunkerRepository
+import com.steve.junker.voice.VoiceParseResult
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -116,10 +119,14 @@ class GameViewModel : ViewModel() {
     private val _isBlitzEnabled = MutableStateFlow(false)
     val isBlitzEnabled: StateFlow<Boolean> = _isBlitzEnabled.asStateFlow()
 
+    private val _pointValue = MutableStateFlow(1.0)
+    val pointValue: StateFlow<Double> = _pointValue.asStateFlow()
+
     fun setUseTeams(enabled: Boolean) { _useTeams.value = enabled }
     fun configureTeams(teamList: List<Team>) { _teams.value = teamList }
     fun setGameType(type: GameType) { _gameType.value = type }
     fun setBlitzEnabled(enabled: Boolean) { _isBlitzEnabled.value = enabled }
+    fun setPointValue(value: Double) { _pointValue.value = value.coerceAtLeast(0.0) }
 
     private val _savedPlayers = MutableStateFlow<List<Player>>(emptyList())
     val savedPlayers: StateFlow<List<Player>> = _savedPlayers.asStateFlow()
@@ -227,7 +234,8 @@ class GameViewModel : ViewModel() {
         matchInTeamMode: Boolean = false,
         activeTeamsList: List<Team> = emptyList(),
         gameType: GameType = _gameType.value,
-        isBlitzEnabled: Boolean = _isBlitzEnabled.value
+        isBlitzEnabled: Boolean = _isBlitzEnabled.value,
+        pointValue: Double = 1.0
     ) {
         _activePlayers.value = players
         _selectedCourse.value = course
@@ -237,6 +245,7 @@ class GameViewModel : ViewModel() {
         _teams.value = activeTeamsList
         _gameType.value = gameType
         _isBlitzEnabled.value = isBlitzEnabled
+        _pointValue.value = pointValue.coerceAtLeast(0.0)
         _isRoundLocked.value = false
         activeRoundCreatorDeviceId = currentDeviceId
         
@@ -320,6 +329,7 @@ class GameViewModel : ViewModel() {
                 
                 playerList[existingIndex] = when (dotType) {
                     "hasSandy" -> hScore.copy(hasSandy = !hScore.hasSandy)
+                    "hasDoubleSandy" -> hScore.copy(hasDoubleSandy = !hScore.hasDoubleSandy)
                     "hasPoley" -> hScore.copy(hasPoley = !hScore.hasPoley)
                     "hasDoublePoley" -> hScore.copy(hasDoublePoley = !hScore.hasDoublePoley)
                     "hasLostBoy" -> hScore.copy(hasLostBoy = !hScore.hasLostBoy)
@@ -332,6 +342,138 @@ class GameViewModel : ViewModel() {
         }
     }
 
+    fun setJunkDot(playerId: String, holeNumber: Int, dotType: String, enabled: Boolean) {
+        if (holeNumber !in 1..18) return
+        _scores.update { currentMap ->
+            val updatedMap = currentMap.toMutableMap()
+            val existingIndex = holeNumber - 1
+
+            if (dotType == "hasDrive" || dotType == "hasCtp") {
+                val allKeys = (updatedMap.keys + playerId).toSet()
+                allKeys.forEach { pId ->
+                    val list = updatedMap[pId]?.toMutableList() ?: MutableList(18) { HoleScore() }
+                    val hScore = list[existingIndex]
+                    list[existingIndex] = if (dotType == "hasDrive") {
+                        val newVal = if (pId == playerId) enabled else if (enabled) false else hScore.hasDrive
+                        hScore.copy(hasDrive = newVal)
+                    } else {
+                        val newVal = if (pId == playerId) enabled else if (enabled) false else hScore.hasCtp
+                        hScore.copy(hasCtp = newVal)
+                    }
+                    updatedMap[pId] = list
+                }
+            } else {
+                val playerList = updatedMap[playerId]?.toMutableList() ?: MutableList(18) { HoleScore() }
+                val hScore = playerList[existingIndex]
+
+                playerList[existingIndex] = when (dotType) {
+                    "hasSandy" -> hScore.copy(hasSandy = enabled)
+                    "hasDoubleSandy" -> hScore.copy(hasDoubleSandy = enabled)
+                    "hasPoley" -> hScore.copy(hasPoley = enabled)
+                    "hasDoublePoley" -> hScore.copy(hasDoublePoley = enabled)
+                    "hasLostBoy" -> hScore.copy(hasLostBoy = enabled)
+                    "hasJacques" -> hScore.copy(hasJacques = enabled)
+                    else -> hScore
+                }
+                updatedMap[playerId] = playerList
+            }
+            updatedMap.toMap()
+        }
+    }
+
+    fun applyVoiceBatch(result: VoiceParseResult, onComplete: () -> Unit) {
+        val targetHole = if (result.targetHole in 1..18) {
+            _currentHole.value = result.targetHole
+            result.targetHole
+        } else {
+            _currentHole.value
+        }
+        val holeIndex = targetHole - 1
+
+        _scores.update { currentMap ->
+            val updatedMap = currentMap.toMutableMap()
+
+            result.updates.forEach { update ->
+                val list = updatedMap[update.playerId]?.toMutableList() ?: MutableList(18) { HoleScore() }
+                var hScore = list.getOrNull(holeIndex) ?: HoleScore()
+
+                val gross = update.grossScore
+                if (gross != null && gross in 1..12) {
+                    hScore = hScore.copy(grossScore = gross)
+                }
+
+                update.junkDots.forEach { dotType ->
+                    hScore = when (dotType) {
+                        "hasDrive" -> {
+                            // Enforce mutual exclusivity across all other players on this hole
+                            (updatedMap.keys + _activePlayers.value.map { it.id }).toSet().forEach { otherId ->
+                                if (otherId != update.playerId) {
+                                    val otherList = updatedMap[otherId]?.toMutableList() ?: MutableList(18) { HoleScore() }
+                                    otherList[holeIndex] = otherList[holeIndex].copy(hasDrive = false)
+                                    updatedMap[otherId] = otherList
+                                }
+                            }
+                            hScore.copy(hasDrive = true)
+                        }
+                        "hasCtp" -> {
+                            // Enforce mutual exclusivity across all other players on this hole
+                            (updatedMap.keys + _activePlayers.value.map { it.id }).toSet().forEach { otherId ->
+                                if (otherId != update.playerId) {
+                                    val otherList = updatedMap[otherId]?.toMutableList() ?: MutableList(18) { HoleScore() }
+                                    otherList[holeIndex] = otherList[holeIndex].copy(hasCtp = false)
+                                    updatedMap[otherId] = otherList
+                                }
+                            }
+                            hScore.copy(hasCtp = true)
+                        }
+                        "hasSandy" -> hScore.copy(hasSandy = true)
+                        "hasDoubleSandy" -> hScore.copy(hasDoubleSandy = true)
+                        "hasPoley" -> hScore.copy(hasPoley = true)
+                        "hasDoublePoley" -> hScore.copy(hasDoublePoley = true)
+                        "hasLostBoy" -> hScore.copy(hasLostBoy = true)
+                        "hasJacques" -> hScore.copy(hasJacques = true)
+                        else -> hScore
+                    }
+                }
+
+                list[holeIndex] = hScore
+                updatedMap[update.playerId] = list
+            }
+
+            // Recalculate wheeled net scores across all players atomically
+            updatedMap.keys.forEach { pId ->
+                val list = updatedMap[pId]?.toMutableList() ?: MutableList(18) { HoleScore() }
+                for (i in 0..17) {
+                    val entry = list[i]
+                    if (entry.grossScore > 0) {
+                        val computedNet = computeWheeledNetScore(entry.grossScore, i, pId)
+                        list[i] = entry.copy(netScore = computedNet)
+                    }
+                }
+                updatedMap[pId] = list.toList()
+            }
+
+            updatedMap.toMap()
+        }
+
+        val updatedScores = _scores.value
+        if (_gameType.value == GameType.NINES) {
+            val ninesResult = calculateNinesPoints(updatedScores, _activePlayers.value, _isBlitzEnabled.value)
+            archiveCurrentRound(ninesResult.playerTotals)
+        } else {
+            val calculatedMatrix = calculateJunkDots(
+                updatedScores,
+                _pressHoles.value,
+                _selectedCourse.value,
+                _teams.value,
+                _useTeams.value
+            )
+            archiveCurrentRound(calculatedMatrix.entityTotals)
+        }
+
+        onComplete()
+    }
+
     private val _savedRounds = MutableStateFlow<List<com.steve.junker.data.db.GameRoundEntity>>(emptyList())
     val savedRounds: StateFlow<List<com.steve.junker.data.db.GameRoundEntity>> = _savedRounds.asStateFlow()
 
@@ -342,6 +484,7 @@ class GameViewModel : ViewModel() {
         val isTeamMode = useTeams.value
         val currentGameType = gameType.value
         val currentBlitzEnabled = isBlitzEnabled.value
+        val currentPointValue = pointValue.value
         val currentScoresMap = scores.value
         
         if (currentPlayers.isEmpty()) return
@@ -369,6 +512,7 @@ class GameViewModel : ViewModel() {
             rootContainerJsonObject.put("isTeamMode", isTeamMode)
             rootContainerJsonObject.put("gameType", currentGameType.name)
             rootContainerJsonObject.put("isBlitzEnabled", currentBlitzEnabled)
+            rootContainerJsonObject.put("pointValue", currentPointValue)
             rootContainerJsonObject.put("isLocked", isLocked || _isRoundLocked.value)
             rootContainerJsonObject.put("creatorDeviceId", activeRoundCreatorDeviceId ?: currentDeviceId)
             val pressHolesArray = JSONArray()
@@ -384,6 +528,7 @@ class GameViewModel : ViewModel() {
                     scoreObj.put("netScore", score.netScore)
                     scoreObj.put("hasDrive", score.hasDrive)
                     scoreObj.put("hasSandy", score.hasSandy)
+                    scoreObj.put("hasDoubleSandy", score.hasDoubleSandy)
                     scoreObj.put("hasPoley", score.hasPoley)
                     scoreObj.put("hasDoublePoley", score.hasDoublePoley)
                     scoreObj.put("hasJacques", score.hasJacques)
@@ -435,6 +580,7 @@ class GameViewModel : ViewModel() {
             var parsedAsTeams = false
             var restoredGameType = GameType.RAW_JUNKER
             var restoredBlitzEnabled = false
+            var restoredPointValue = 0.0
             val restoredPressHoles = mutableListOf<Int>()
             var restoredIsLocked = false
             var restoredCreatorDeviceId = ""
@@ -448,6 +594,7 @@ class GameViewModel : ViewModel() {
                     val gameTypeStr = rootJson.optString("gameType", GameType.RAW_JUNKER.name)
                     restoredGameType = runCatching { GameType.valueOf(gameTypeStr) }.getOrDefault(GameType.RAW_JUNKER)
                     restoredBlitzEnabled = rootJson.optBoolean("isBlitzEnabled", false)
+                    restoredPointValue = rootJson.optDouble("pointValue", 0.0).takeIf { !it.isNaN() } ?: 0.0
                     restoredIsLocked = rootJson.optBoolean("isLocked", false)
                     restoredCreatorDeviceId = rootJson.optString("creatorDeviceId", "")
                     if (rootJson.has("pressHoles")) {
@@ -477,6 +624,7 @@ class GameViewModel : ViewModel() {
                                 netScore = obj.optInt("netScore", 0),
                                 hasDrive = obj.optBoolean("hasDrive", false),
                                 hasSandy = obj.optBoolean("hasSandy", false),
+                                hasDoubleSandy = obj.optBoolean("hasDoubleSandy", false),
                                 hasPoley = obj.optBoolean("hasPoley", false),
                                 hasDoublePoley = obj.optBoolean("hasDoublePoley", false),
                                 hasJacques = obj.optBoolean("hasJacques", false),
@@ -532,6 +680,7 @@ class GameViewModel : ViewModel() {
                 _teams.value = reconstructedTeams
                 _gameType.value = restoredGameType
                 _isBlitzEnabled.value = restoredBlitzEnabled
+                _pointValue.value = restoredPointValue
                 _activePlayers.value = reconstructedPlayers
                 _scores.value = reconstructedScores
                 _pressHoles.value = restoredPressHoles

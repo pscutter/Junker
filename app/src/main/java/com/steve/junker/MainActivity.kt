@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -40,6 +41,7 @@ import com.steve.junker.data.models.Course
 import com.steve.junker.data.models.HoleCalculationResult
 import com.steve.junker.data.models.calculateJunkDots
 import com.steve.junker.data.models.calculateNinesPoints
+import com.steve.junker.data.models.calculateSettlement
 import com.steve.junker.data.models.Player
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
@@ -161,7 +163,8 @@ class MainActivity : ComponentActivity() {
                                     matchInTeamMode = effectiveUseTeams,
                                     activeTeamsList = if (effectiveUseTeams) gameViewModel.teams.value else emptyList(),
                                     gameType = selectedGameType,
-                                    isBlitzEnabled = if (selectedGameType == com.steve.junker.data.models.GameType.NINES) gameViewModel.isBlitzEnabled.value else false
+                                    isBlitzEnabled = if (selectedGameType == com.steve.junker.data.models.GameType.NINES) gameViewModel.isBlitzEnabled.value else false,
+                                    pointValue = gameViewModel.pointValue.value
                                 )
                                 navController.navigate("scorecard") 
                             } 
@@ -251,6 +254,7 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
     val teams by viewModel.teams.collectAsState()
     val gameType by viewModel.gameType.collectAsState()
     val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
+    val pointValue by viewModel.pointValue.collectAsState()
     var expandedTeamIds by remember { mutableStateOf(emptySet<String>()) }
     var selectedHolePlayerForPopup by remember { mutableStateOf<Pair<Player, Int>?>(null) }
     val isRoundLocked by viewModel.isRoundLocked.collectAsState()
@@ -261,6 +265,14 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
     val ninesOutput = if (gameType == GameType.NINES) calculateNinesPoints(scores, players, isBlitzEnabled) else null
     val finalCalculatedJunk = if (gameType == GameType.NINES) ninesOutput!!.playerTotals else calculationOutput.entityTotals
     val breakdownMatrix = calculationOutput.holeBreakdowns
+    val settlementSummary = calculateSettlement(
+        entityTotals = finalCalculatedJunk,
+        players = players,
+        teams = teams,
+        useTeams = useTeams,
+        gameType = gameType,
+        pointValue = pointValue
+    )
     
     val horizontalScrollState = rememberScrollState()
     val appBg = getAppBg(isDarkMode)
@@ -1004,6 +1016,135 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                      }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            if (pointValue > 0.0 && !isLandscape) {
+                Spacer(modifier = Modifier.height(10.dp))
+                val valueStr = String.format(java.util.Locale.US, "%.2f", pointValue)
+                val unitLabel = if (gameType == GameType.NINES) "pts" else "dots"
+                val posGreen = if (isDarkMode) Color(0xFF66BB6A) else Color(0xFF2E7D32)
+                val negRed = if (isDarkMode) Color(0xFFEF5350) else Color(0xFFD32F2F)
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = cardBg),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .border(1.dp, goldColor.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "💵 19th-Hole Settlement ($$valueStr / pt)",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = goldColor
+                        )
+                        HorizontalDivider(color = textSecondary.copy(alpha = 0.25f))
+
+                        settlementSummary.standings.forEach { standing ->
+                            val netColor = when {
+                                standing.netDollars > 0.005 -> posGreen
+                                standing.netDollars < -0.005 -> negRed
+                                else -> textSecondary
+                            }
+                            val netText = when {
+                                standing.netDollars > 0.005 -> "+$${String.format(java.util.Locale.US, "%.2f", standing.netDollars)}"
+                                standing.netDollars < -0.005 -> "-$${String.format(java.util.Locale.US, "%.2f", kotlin.math.abs(standing.netDollars))}"
+                                else -> "$0.00"
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${standing.name} (${standing.points} $unitLabel)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = textPrimary
+                                )
+                                Text(
+                                    text = netText,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = netColor
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = textSecondary.copy(alpha = 0.25f))
+
+                        if (settlementSummary.transactions.isEmpty()) {
+                            Text(
+                                text = "All square — no money changes hands.",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = textSecondary
+                            )
+                        } else {
+                            settlementSummary.transactions.forEach { tx ->
+                                Text(
+                                    text = "• ${tx.fromName} pays ${tx.toName} $${String.format(java.util.Locale.US, "%.2f", tx.amount)}",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = textPrimary
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Button(
+                            onClick = {
+                                val sdf = java.text.SimpleDateFormat("MMMM dd, yyyy", java.util.Locale.getDefault())
+                                val dateStr = sdf.format(java.util.Date())
+                                val formatStr = if (gameType == GameType.NINES) "Nines" else if (useTeams) "Raw Junker (2v2)" else "Raw Junker"
+                                val sb = StringBuilder()
+                                sb.append("Junker Golf — 19th-Hole Settlement\n")
+                                sb.append("Course: ${course?.name ?: "Unknown Course"}\n")
+                                sb.append("Date: $dateStr\n")
+                                sb.append("Format: $formatStr ($$valueStr / pt)\n\n")
+                                sb.append("--- NET STANDINGS ---\n")
+                                settlementSummary.standings.forEach { s ->
+                                    val netStr = when {
+                                        s.netDollars > 0.005 -> "+$${String.format(java.util.Locale.US, "%.2f", s.netDollars)}"
+                                        s.netDollars < -0.005 -> "-$${String.format(java.util.Locale.US, "%.2f", kotlin.math.abs(s.netDollars))}"
+                                        else -> "$0.00"
+                                    }
+                                    sb.append("${s.name}: ${s.points} $unitLabel ($netStr)\n")
+                                }
+                                sb.append("\n--- PAYOUTS ---\n")
+                                if (settlementSummary.transactions.isEmpty()) {
+                                    sb.append("All square — no money changes hands.\n")
+                                } else {
+                                    settlementSummary.transactions.forEach { tx ->
+                                        sb.append("${tx.fromName} pays ${tx.toName} $${String.format(java.util.Locale.US, "%.2f", tx.amount)}\n")
+                                    }
+                                }
+                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(android.content.Intent.EXTRA_SUBJECT, "19th-Hole Settlement - ${course?.name ?: "Golf Match"}")
+                                    putExtra(android.content.Intent.EXTRA_TEXT, sb.toString())
+                                }
+                                try {
+                                    context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Results"))
+                                } catch (ex: Exception) {
+                                    android.widget.Toast.makeText(context, "No app available to share results", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = GolfGreen),
+                            modifier = Modifier.fillMaxWidth().height(40.dp)
+                        ) {
+                            Text("Share Results 📤", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
