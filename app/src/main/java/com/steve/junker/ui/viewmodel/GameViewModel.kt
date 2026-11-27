@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import com.steve.junker.data.api.GolfCourseApiService
 import com.steve.junker.data.api.ApiSearchResponse
 import com.steve.junker.data.models.Course
+import com.steve.junker.data.models.GameType
 import com.steve.junker.data.models.HoleScore
 import com.steve.junker.data.models.Player
 import com.steve.junker.data.models.Team
@@ -109,8 +110,16 @@ class GameViewModel : ViewModel() {
     private val _teams = MutableStateFlow<List<Team>>(emptyList())
     val teams: StateFlow<List<Team>> = _teams.asStateFlow()
 
+    private val _gameType = MutableStateFlow(GameType.RAW_JUNKER)
+    val gameType: StateFlow<GameType> = _gameType.asStateFlow()
+
+    private val _isBlitzEnabled = MutableStateFlow(false)
+    val isBlitzEnabled: StateFlow<Boolean> = _isBlitzEnabled.asStateFlow()
+
     fun setUseTeams(enabled: Boolean) { _useTeams.value = enabled }
     fun configureTeams(teamList: List<Team>) { _teams.value = teamList }
+    fun setGameType(type: GameType) { _gameType.value = type }
+    fun setBlitzEnabled(enabled: Boolean) { _isBlitzEnabled.value = enabled }
 
     private val _savedPlayers = MutableStateFlow<List<Player>>(emptyList())
     val savedPlayers: StateFlow<List<Player>> = _savedPlayers.asStateFlow()
@@ -212,13 +221,22 @@ class GameViewModel : ViewModel() {
     }
 
     // FIX: Core parameters extended to safely bind team configurations on state initialization
-    fun setupGame(players: List<Player>, course: Course, matchInTeamMode: Boolean = false, activeTeamsList: List<Team> = emptyList()) {
+    fun setupGame(
+        players: List<Player>,
+        course: Course,
+        matchInTeamMode: Boolean = false,
+        activeTeamsList: List<Team> = emptyList(),
+        gameType: GameType = _gameType.value,
+        isBlitzEnabled: Boolean = _isBlitzEnabled.value
+    ) {
         _activePlayers.value = players
         _selectedCourse.value = course
         _pressHoles.value = emptyList()
         _currentHole.value = 1
         _useTeams.value = matchInTeamMode
         _teams.value = activeTeamsList
+        _gameType.value = gameType
+        _isBlitzEnabled.value = isBlitzEnabled
         _isRoundLocked.value = false
         activeRoundCreatorDeviceId = currentDeviceId
         
@@ -322,6 +340,8 @@ class GameViewModel : ViewModel() {
         val currentPlayers = activePlayers.value
         val currentTeams = teams.value
         val isTeamMode = useTeams.value
+        val currentGameType = gameType.value
+        val currentBlitzEnabled = isBlitzEnabled.value
         val currentScoresMap = scores.value
         
         if (currentPlayers.isEmpty()) return
@@ -331,13 +351,14 @@ class GameViewModel : ViewModel() {
         }
 
         viewModelScope.launch(Dispatchers.IO) {
+            val unitLabel = if (currentGameType == GameType.NINES) "pts" else "dots"
             val finalSummaryString = if (isTeamMode && currentTeams.isNotEmpty()) {
                 currentTeams.map { team ->
-                    "${team.name} (${finalDotsMap[team.id] ?: 0} dots)"
+                    "${team.name} (${finalDotsMap[team.id] ?: 0} $unitLabel)"
                 }.joinToString("\n")
             } else {
                 currentPlayers.map { p ->
-                    "${p.name} (${finalDotsMap[p.id] ?: 0} dots)"
+                    "${p.name} (${finalDotsMap[p.id] ?: 0} $unitLabel)"
                 }.joinToString(", ")
             }
 
@@ -346,6 +367,8 @@ class GameViewModel : ViewModel() {
             }
             val rootContainerJsonObject = JSONObject()
             rootContainerJsonObject.put("isTeamMode", isTeamMode)
+            rootContainerJsonObject.put("gameType", currentGameType.name)
+            rootContainerJsonObject.put("isBlitzEnabled", currentBlitzEnabled)
             rootContainerJsonObject.put("isLocked", isLocked || _isRoundLocked.value)
             rootContainerJsonObject.put("creatorDeviceId", activeRoundCreatorDeviceId ?: currentDeviceId)
             val pressHolesArray = JSONArray()
@@ -378,7 +401,9 @@ class GameViewModel : ViewModel() {
                 courseName = currentCourse.name,
                 playerNamesWithDots = finalSummaryString,
                 scoreSummary = "18-Hole Side Action Matrix Status Updated",
-                rawScoresJson = rootContainerJsonObject.toString()
+                rawScoresJson = rootContainerJsonObject.toString(),
+                gameType = currentGameType,
+                isBlitzEnabled = currentBlitzEnabled
             )
             repository?.saveRound(newRoundRecord)
         }
@@ -408,6 +433,8 @@ class GameViewModel : ViewModel() {
             val reconstructedTeams = mutableListOf<Team>()
             val reconstructedScores = mutableMapOf<String, List<HoleScore>>()
             var parsedAsTeams = false
+            var restoredGameType = GameType.RAW_JUNKER
+            var restoredBlitzEnabled = false
             val restoredPressHoles = mutableListOf<Int>()
             var restoredIsLocked = false
             var restoredCreatorDeviceId = ""
@@ -418,6 +445,9 @@ class GameViewModel : ViewModel() {
                 try {
                     val rootJson = JSONObject(targetRound.rawScoresJson)
                     parsedAsTeams = rootJson.optBoolean("isTeamMode", false)
+                    val gameTypeStr = rootJson.optString("gameType", GameType.RAW_JUNKER.name)
+                    restoredGameType = runCatching { GameType.valueOf(gameTypeStr) }.getOrDefault(GameType.RAW_JUNKER)
+                    restoredBlitzEnabled = rootJson.optBoolean("isBlitzEnabled", false)
                     restoredIsLocked = rootJson.optBoolean("isLocked", false)
                     restoredCreatorDeviceId = rootJson.optString("creatorDeviceId", "")
                     if (rootJson.has("pressHoles")) {
@@ -500,6 +530,8 @@ class GameViewModel : ViewModel() {
                 _selectedCourse.value = restoredCourse
                 _useTeams.value = parsedAsTeams
                 _teams.value = reconstructedTeams
+                _gameType.value = restoredGameType
+                _isBlitzEnabled.value = restoredBlitzEnabled
                 _activePlayers.value = reconstructedPlayers
                 _scores.value = reconstructedScores
                 _pressHoles.value = restoredPressHoles

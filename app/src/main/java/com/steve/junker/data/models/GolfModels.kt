@@ -1,5 +1,10 @@
 package com.steve.junker.data.models
 
+enum class GameType {
+    RAW_JUNKER,
+    NINES
+}
+
 data class Player(val id: String, val name: String, val handicap: Int)
 
 data class Course(val id: String, val name: String, val holeHandicaps: List<Int>, val holePars: List<Int>)
@@ -197,4 +202,70 @@ fun calculateJunkDots(
     awardSideDot(entityTotalNets, 1)
     
     return MatchCalculationOutput(entityTotals, holeBreakdowns)
+}
+
+data class NinesCalculationOutput(
+    val playerTotals: Map<String, Int>,
+    val holePoints: Map<String, List<Int>>
+)
+
+/**
+ * Calculates Nines (5-3-1 for 3 players / Sixteens 7-5-3-1 for 4 players) points per hole and 18-hole totals.
+ * Evaluates each hole only when all active players have a grossScore > 0, using each player's wheeled netScore.
+ */
+fun calculateNinesPoints(
+    scores: Map<String, List<HoleScore>>,
+    activePlayers: List<Player>,
+    isBlitzEnabled: Boolean
+): NinesCalculationOutput {
+    val playerTotals = activePlayers.associate { it.id to 0 }.toMutableMap()
+    val holePoints = activePlayers.associate { it.id to MutableList(18) { 0 } }
+
+    val baseRanks = when (activePlayers.size) {
+        3 -> listOf(5, 3, 1)
+        4 -> listOf(7, 5, 3, 1)
+        else -> return NinesCalculationOutput(playerTotals, holePoints)
+    }
+    val totalHolePoints = baseRanks.sum()
+
+    for (hIndex in 0..17) {
+        val holeEntries = activePlayers.map { player ->
+            val hScore = scores[player.id]?.getOrNull(hIndex)
+            player.id to hScore
+        }
+
+        // Only evaluate holes where every active player has entered a valid grossScore > 0
+        if (holeEntries.any { (_, hScore) -> hScore == null || hScore.grossScore <= 0 }) {
+            continue
+        }
+
+        val sortedByNet = holeEntries
+            .map { (playerId, hScore) -> playerId to hScore!!.netScore }
+            .sortedBy { it.second }
+
+        if (isBlitzEnabled && (sortedByNet[1].second - sortedByNet[0].second) >= 2) {
+            val winnerId = sortedByNet[0].first
+            holePoints[winnerId]!![hIndex] = totalHolePoints
+            playerTotals[winnerId] = (playerTotals[winnerId] ?: 0) + totalHolePoints
+            continue
+        }
+
+        var i = 0
+        while (i < sortedByNet.size) {
+            var j = i + 1
+            while (j < sortedByNet.size && sortedByNet[j].second == sortedByNet[i].second) {
+                j++
+            }
+            val pooledPoints = (i until j).sumOf { baseRanks[it] }
+            val pointsEach = pooledPoints / (j - i)
+            for (k in i until j) {
+                val playerId = sortedByNet[k].first
+                holePoints[playerId]!![hIndex] = pointsEach
+                playerTotals[playerId] = (playerTotals[playerId] ?: 0) + pointsEach
+            }
+            i = j
+        }
+    }
+
+    return NinesCalculationOutput(playerTotals, holePoints)
 }

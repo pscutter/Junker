@@ -34,10 +34,12 @@ import com.steve.junker.data.repository.AirtableJunkerRepository
 import com.steve.junker.data.repository.RoomJunkerRepository
 import com.steve.junker.ui.screens.*
 import com.steve.junker.ui.viewmodel.GameViewModel
+import com.steve.junker.data.models.GameType
 import com.steve.junker.data.models.HoleScore
 import com.steve.junker.data.models.Course
 import com.steve.junker.data.models.HoleCalculationResult
 import com.steve.junker.data.models.calculateJunkDots
+import com.steve.junker.data.models.calculateNinesPoints
 import com.steve.junker.data.models.Player
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
@@ -151,11 +153,15 @@ class MainActivity : ComponentActivity() {
                                 viewModel = gameViewModel,
                                 onMenuClick = { scope.launch { drawerState.open() } }
                             ) { c -> 
+                                val selectedGameType = gameViewModel.gameType.value
+                                val effectiveUseTeams = selectedGameType == com.steve.junker.data.models.GameType.RAW_JUNKER && gameViewModel.useTeams.value
                                 gameViewModel.setupGame(
                                     players = gameViewModel.activePlayers.value, 
                                     course = c,
-                                    matchInTeamMode = gameViewModel.useTeams.value,
-                                    activeTeamsList = gameViewModel.teams.value
+                                    matchInTeamMode = effectiveUseTeams,
+                                    activeTeamsList = if (effectiveUseTeams) gameViewModel.teams.value else emptyList(),
+                                    gameType = selectedGameType,
+                                    isBlitzEnabled = if (selectedGameType == com.steve.junker.data.models.GameType.NINES) gameViewModel.isBlitzEnabled.value else false
                                 )
                                 navController.navigate("scorecard") 
                             } 
@@ -243,6 +249,8 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useTeams by viewModel.useTeams.collectAsState()
     val teams by viewModel.teams.collectAsState()
+    val gameType by viewModel.gameType.collectAsState()
+    val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
     var expandedTeamIds by remember { mutableStateOf(emptySet<String>()) }
     var selectedHolePlayerForPopup by remember { mutableStateOf<Pair<Player, Int>?>(null) }
     val isRoundLocked by viewModel.isRoundLocked.collectAsState()
@@ -250,7 +258,8 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
     val context = LocalContext.current
     
     val calculationOutput = calculateJunkDots(scores, pressHoles, course, teams, useTeams)
-    val finalCalculatedJunk = calculationOutput.entityTotals
+    val ninesOutput = if (gameType == GameType.NINES) calculateNinesPoints(scores, players, isBlitzEnabled) else null
+    val finalCalculatedJunk = if (gameType == GameType.NINES) ninesOutput!!.playerTotals else calculationOutput.entityTotals
     val breakdownMatrix = calculationOutput.holeBreakdowns
     
     val horizontalScrollState = rememberScrollState()
@@ -301,15 +310,16 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                 emailBodyBuilder.append("Par: ${course?.holePars?.sum() ?: 72}\n\n")
 
                                 emailBodyBuilder.append("--- LEADERBOARD ---\n")
-                                if (useTeams && teams.isNotEmpty()) {
+                                if (gameType == GameType.RAW_JUNKER && useTeams && teams.isNotEmpty()) {
                                     teams.forEach { team ->
                                         val totalDots = finalCalculatedJunk[team.id] ?: 0
                                         emailBodyBuilder.append("${team.name}: $totalDots dots\n")
                                     }
                                 } else {
+                                    val unitLabel = if (gameType == GameType.NINES) "pts" else "dots"
                                     players.forEach { player ->
                                         val totalDots = finalCalculatedJunk[player.id] ?: 0
-                                        emailBodyBuilder.append("${player.name}: $totalDots dots\n")
+                                        emailBodyBuilder.append("${player.name}: $totalDots $unitLabel\n")
                                     }
                                 }
                                 emailBodyBuilder.append("\n")
@@ -511,11 +521,11 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
 
             Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 Row(modifier = Modifier.background(GolfGreen), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (useTeams) " Teams Matrix" else " Player Name", color = Color.White, fontWeight = FontWeight.ExtraBold, modifier = Modifier.width(220.dp).padding(start = 8.dp), fontSize = 20.sp)
+                    Text(if (gameType == GameType.RAW_JUNKER && useTeams) " Teams Matrix" else " Player Name", color = Color.White, fontWeight = FontWeight.ExtraBold, modifier = Modifier.width(220.dp).padding(start = 8.dp), fontSize = 20.sp)
                     Row(modifier = Modifier.weight(1f).horizontalScroll(horizontalScrollState), verticalAlignment = Alignment.CenterVertically) {
                         for (h in 1..9) {
                                      Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
-                                         Text(text = "H$h", color = if (pressHoles.isNotEmpty() && h >= pressHoles.min()) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                                         Text(text = "H$h", color = if (gameType == GameType.RAW_JUNKER && pressHoles.isNotEmpty() && h >= pressHoles.min()) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                                      }
                                  }
                         Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
@@ -523,7 +533,7 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                         }
                         for (h in 10..18) {
                                      Box(modifier = Modifier.width(84.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
-                                         Text(text = "H$h", color = if (pressHoles.isNotEmpty() && h >= pressHoles.min()) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                                         Text(text = "H$h", color = if (gameType == GameType.RAW_JUNKER && pressHoles.isNotEmpty() && h >= pressHoles.min()) Color.Red else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                                      }
                                  }
                         Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
@@ -533,13 +543,13 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                             Text("NET", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                         }
                         Box(modifier = Modifier.width(110.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
-                            Text("JUNK", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                            Text(if (gameType == GameType.NINES) "PTS" else "JUNK", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                         }
                     }
                 }
 
                 LazyColumn(modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (useTeams && teams.isNotEmpty()) {
+                    if (gameType == GameType.RAW_JUNKER && useTeams && teams.isNotEmpty()) {
                         teams.forEach { team ->
                             item(key = team.id) {
                                 val teamBreakdowns = breakdownMatrix[team.id] ?: List(18) { HoleCalculationResult() }
@@ -792,7 +802,12 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                             }
                         }
                     } else {
-                        items(players) { player ->
+                        val displayPlayers = if (gameType == GameType.NINES) {
+                            players.sortedByDescending { finalCalculatedJunk[it.id] ?: 0 }
+                        } else {
+                            players
+                        }
+                        items(displayPlayers) { player ->
                             val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                             val playerBreakdowns = breakdownMatrix[player.id] ?: List(18) { HoleCalculationResult() }
                             val frontNet = playerHoleScores.take(9).sumOf { it.netScore }
@@ -818,7 +833,11 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                          ) {
                                              if (hScore.grossScore > 0) {
                                                  val hCalc = playerBreakdowns.getOrNull(h - 1) ?: HoleCalculationResult()
-                                                 val dots = hCalc.basicJunkDots + hCalc.skinDotsWon + hCalc.ctpDotsWon
+                                                 val dots = if (gameType == GameType.NINES) {
+                                                     ninesOutput?.holePoints?.get(player.id)?.getOrNull(h - 1) ?: 0
+                                                 } else {
+                                                     hCalc.basicJunkDots + hCalc.skinDotsWon + hCalc.ctpDotsWon
+                                                 }
                                                  Canvas(modifier = Modifier.fillMaxSize()) {
                                                      drawLine(
                                                          color = lineColor,
@@ -828,7 +847,11 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                                      )
                                                  }
                                                  val par = course?.holePars?.getOrNull(h - 1) ?: 4
-                                                 val hasDots = playerEarnedDotsOnHole(hScore, par) || hCalc.skinDotsWon > 0
+                                                 val hasDots = if (gameType == GameType.NINES) {
+                                                     dots > 0
+                                                 } else {
+                                                     playerEarnedDotsOnHole(hScore, par) || hCalc.skinDotsWon > 0
+                                                 }
                                                  GolfScoreBadge(
                                                      score = hScore.grossScore,
                                                      par = par,
@@ -859,15 +882,19 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                              }
                                          }
                                      }
-                                     val playerFront9Dots = playerBreakdowns.take(9).sumOf { it.basicJunkDots + it.skinDotsWon + it.ctpDotsWon } + (
-                                         if (players.associate { p ->
-                                             val pScores = scores[p.id] ?: List(18) { HoleScore() }
-                                             p.id to pScores.take(9).sumOf { it.netScore }
-                                         }.let { nets ->
-                                             val minN = nets.values.minOrNull()
-                                             minN != null && nets.filterValues { it == minN }.size == 1 && nets[player.id] == minN
-                                         }) 1 else 0
-                                     )
+                                     val playerFront9Dots = if (gameType == GameType.NINES) {
+                                         ninesOutput?.holePoints?.get(player.id)?.take(9)?.sum() ?: 0
+                                     } else {
+                                         playerBreakdowns.take(9).sumOf { it.basicJunkDots + it.skinDotsWon + it.ctpDotsWon } + (
+                                             if (players.associate { p ->
+                                                 val pScores = scores[p.id] ?: List(18) { HoleScore() }
+                                                 p.id to pScores.take(9).sumOf { it.netScore }
+                                             }.let { nets ->
+                                                 val minN = nets.values.minOrNull()
+                                                 minN != null && nets.filterValues { it == minN }.size == 1 && nets[player.id] == minN
+                                             }) 1 else 0
+                                         )
+                                     }
                                      Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, lineColor)) {
                                          Canvas(modifier = Modifier.fillMaxSize()) {
                                              drawLine(
@@ -909,7 +936,11 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                          ) {
                                              if (hScore.grossScore > 0) {
                                                  val hCalc = playerBreakdowns.getOrNull(h - 1) ?: HoleCalculationResult()
-                                                 val dots = hCalc.basicJunkDots + hCalc.skinDotsWon + hCalc.ctpDotsWon
+                                                 val dots = if (gameType == GameType.NINES) {
+                                                     ninesOutput?.holePoints?.get(player.id)?.getOrNull(h - 1) ?: 0
+                                                 } else {
+                                                     hCalc.basicJunkDots + hCalc.skinDotsWon + hCalc.ctpDotsWon
+                                                 }
                                                  Canvas(modifier = Modifier.fillMaxSize()) {
                                                      drawLine(
                                                          color = lineColor,
@@ -919,7 +950,11 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                                      )
                                                  }
                                                  val par = course?.holePars?.getOrNull(h - 1) ?: 4
-                                                 val hasDots = playerEarnedDotsOnHole(hScore, par) || hCalc.skinDotsWon > 0
+                                                 val hasDots = if (gameType == GameType.NINES) {
+                                                     dots > 0
+                                                 } else {
+                                                     playerEarnedDotsOnHole(hScore, par) || hCalc.skinDotsWon > 0
+                                                 }
                                                  GolfScoreBadge(
                                                      score = hScore.grossScore,
                                                      par = par,
@@ -957,7 +992,15 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                                          Text(text = "${frontNet + backNet}", color = textPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 24.sp)
                                      }
                                      Box(modifier = Modifier.width(110.dp).height(56.dp).border(1.dp, lineColor), contentAlignment = Alignment.Center) {
-                                         Text(text = "$totalDotsEarned", color = goldColor, fontWeight = FontWeight.ExtraBold, fontSize = 26.sp)
+                                         if (gameType == GameType.NINES) {
+                                             val maxNinesPts = if (players.size == 3) 162 else 288
+                                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                 Text(text = "$totalDotsEarned", color = goldColor, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
+                                                 Text(text = "/$maxNinesPts", color = textSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                             }
+                                         } else {
+                                             Text(text = "$totalDotsEarned", color = goldColor, fontWeight = FontWeight.ExtraBold, fontSize = 26.sp)
+                                         }
                                      }
                                 }
                             }
@@ -1002,26 +1045,42 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                     )
                     Divider(color = textSecondary.copy(alpha = 0.2f))
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Dots Earned:",
-                        fontWeight = FontWeight.ExtraBold,
-                        color = textPrimary,
-                        fontSize = 16.sp
-                    )
-                    if (dotsBreakdown.isEmpty()) {
+                    if (gameType == GameType.NINES) {
+                        val ninesHolePts = ninesOutput?.holePoints?.get(player.id)?.getOrNull(hole - 1) ?: 0
                         Text(
-                            text = "• No dots earned on this hole.",
-                            color = textSecondary,
+                            text = "Nines Points Earned:",
+                            fontWeight = FontWeight.ExtraBold,
+                            color = textPrimary,
+                            fontSize = 16.sp
+                        )
+                        Text(
+                            text = "• +$ninesHolePts pts",
+                            color = if (ninesHolePts > 0) goldColor else textSecondary,
+                            fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
                         )
                     } else {
-                        dotsBreakdown.forEach { dot ->
+                        Text(
+                            text = "Dots Earned:",
+                            fontWeight = FontWeight.ExtraBold,
+                            color = textPrimary,
+                            fontSize = 16.sp
+                        )
+                        if (dotsBreakdown.isEmpty()) {
                             Text(
-                                text = "• $dot",
-                                color = goldColor,
-                                fontWeight = FontWeight.Bold,
+                                text = "• No dots earned on this hole.",
+                                color = textSecondary,
                                 fontSize = 14.sp
                             )
+                        } else {
+                            dotsBreakdown.forEach { dot ->
+                                Text(
+                                    text = "• $dot",
+                                    color = goldColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
                         }
                     }
                 }

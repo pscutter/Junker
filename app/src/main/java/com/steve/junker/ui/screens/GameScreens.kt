@@ -22,12 +22,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import com.steve.junker.data.models.GameType
 import com.steve.junker.data.models.HoleScore
 import com.steve.junker.data.models.Player
 import com.steve.junker.data.models.Course
 import com.steve.junker.data.models.Team
 import com.steve.junker.ui.viewmodel.GameViewModel
 import com.steve.junker.data.models.calculateJunkDots
+import com.steve.junker.data.models.calculateNinesPoints
 import com.steve.junker.DrawerHeaderBar
 
 val GolfGreen = Color(0xFF1B5E20)
@@ -77,6 +79,8 @@ fun PlayerSetupScreen(
     val isPlayersLoading by viewModel.isPlayersLoading.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useTeams by viewModel.useTeams.collectAsState()
+    val gameType by viewModel.gameType.collectAsState()
+    val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
     
     val activeFoursome = remember { mutableStateListOf<Player>() }
     var errorMessage by remember { mutableStateOf("") }
@@ -84,6 +88,12 @@ fun PlayerSetupScreen(
 
     LaunchedEffect(Unit) {
         viewModel.refreshPlayers()
+    }
+
+    LaunchedEffect(gameType) {
+        if (gameType == GameType.NINES && useTeams) {
+            viewModel.setUseTeams(false)
+        }
     }
 
     val appBg = getAppBg(isDarkMode)
@@ -95,13 +105,63 @@ fun PlayerSetupScreen(
     Surface(modifier = Modifier.fillMaxSize().imePadding(), color = appBg) {
         Column(modifier = Modifier.padding(24.dp)) {
             DrawerHeaderBar("Player Directory", isDarkMode, onMenuClick, { viewModel.toggleTheme() })
-            
-            Text("Select or create players for the match (1 to 4)", style = MaterialTheme.typography.bodyMedium, color = textSecondary)
+
+            // Game Format Selector (Raw Junker vs Nines)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val isRawJunker = gameType == GameType.RAW_JUNKER
+                Button(
+                    onClick = {
+                        viewModel.setGameType(GameType.RAW_JUNKER)
+                        errorMessage = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isRawJunker) GolfGreen else cardBg,
+                        contentColor = if (isRawJunker) Color.White else textPrimary
+                    ),
+                    border = if (isRawJunker) null else BorderStroke(1.dp, Color.Gray),
+                    modifier = Modifier.weight(1f).height(42.dp)
+                ) {
+                    Text("Raw Junker", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                Button(
+                    onClick = {
+                        viewModel.setGameType(GameType.NINES)
+                        viewModel.setUseTeams(false)
+                        errorMessage = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (!isRawJunker) GolfGreen else cardBg,
+                        contentColor = if (!isRawJunker) Color.White else textPrimary
+                    ),
+                    border = if (!isRawJunker) null else BorderStroke(1.dp, Color.Gray),
+                    modifier = Modifier.weight(1f).height(42.dp)
+                ) {
+                    Text("Nines", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            }
+
+            Text(
+                if (gameType == GameType.NINES) "Select or create players for Nines (3 or 4)"
+                else "Select or create players for the match (1 to 4)",
+                style = MaterialTheme.typography.bodyMedium,
+                color = textSecondary
+            )
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = useTeams, onCheckedChange = { viewModel.setUseTeams(it) })
-                Text("Enable 2v2 Team Scoring Mode", color = textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            if (gameType == GameType.RAW_JUNKER) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = useTeams, onCheckedChange = { viewModel.setUseTeams(it) })
+                    Text("Enable 2v2 Team Scoring Mode", color = textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = isBlitzEnabled, onCheckedChange = { viewModel.setBlitzEnabled(it) })
+                    Text("Enable Blitz Variant (2+ stroke win takes all points)", color = textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -247,19 +307,29 @@ fun PlayerSetupScreen(
 
             Button(
                 onClick = {
-                    if (activeFoursome.isEmpty()) {
+                    if (gameType == GameType.NINES && activeFoursome.size !in 3..4) {
+                        errorMessage = "Nines requires 3 or 4 players."
+                    } else if (activeFoursome.isEmpty()) {
                         errorMessage = "Queue players to start matching."
-                    } else if (useTeams && activeFoursome.size != 4) {
+                    } else if (gameType == GameType.RAW_JUNKER && useTeams && activeFoursome.size != 4) {
                         errorMessage = "Team mode requires exactly 4 queued players."
                     } else {
                         var builtTeamsList = emptyList<Team>()
-                        if (useTeams) {
+                        val effectiveUseTeams = gameType == GameType.RAW_JUNKER && useTeams
+                        if (effectiveUseTeams) {
                             val t1 = Team("team_1", "${activeFoursome[0].name} / ${activeFoursome[1].name}", listOf(activeFoursome[0].id, activeFoursome[1].id))
                             val t2 = Team("team_2", "${activeFoursome[2].name} / ${activeFoursome[3].name}", listOf(activeFoursome[2].id, activeFoursome[3].id))
                             builtTeamsList = listOf(t1, t2)
                             viewModel.configureTeams(builtTeamsList)
                         }
-                        viewModel.setupGame(activeFoursome.toList(), Course("", "", emptyList(), emptyList()), useTeams, builtTeamsList)
+                        viewModel.setupGame(
+                            players = activeFoursome.toList(),
+                            course = Course("", "", emptyList(), emptyList()),
+                            matchInTeamMode = effectiveUseTeams,
+                            activeTeamsList = builtTeamsList,
+                            gameType = gameType,
+                            isBlitzEnabled = if (gameType == GameType.NINES) isBlitzEnabled else false
+                        )
                         onSetupComplete()
                     }
                 },
@@ -449,6 +519,8 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val useTeams by viewModel.useTeams.collectAsState()
     val teams by viewModel.teams.collectAsState()
+    val gameType by viewModel.gameType.collectAsState()
+    val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
     val isRoundLocked by viewModel.isRoundLocked.collectAsState()
     
     val listState = rememberLazyListState()
@@ -463,8 +535,13 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     val goldColor = getGoldThemeColor(isDarkMode)
 
     val triggerAutoSave: () -> Unit = {
-        val calculatedMatrix = calculateJunkDots(scores, pressHoles, course, teams, useTeams)
-        viewModel.archiveCurrentRound(calculatedMatrix.entityTotals)
+        if (gameType == GameType.NINES) {
+            val ninesResult = calculateNinesPoints(scores, players, isBlitzEnabled)
+            viewModel.archiveCurrentRound(ninesResult.playerTotals)
+        } else {
+            val calculatedMatrix = calculateJunkDots(scores, pressHoles, course, teams, useTeams)
+            viewModel.archiveCurrentRound(calculatedMatrix.entityTotals)
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = appBg) {
@@ -508,54 +585,56 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            val currentMultiplier = if (pressHoles.isEmpty()) 1 else {
-                var m = 1
-                pressHoles.sorted().forEach { pHole ->
-                    if (currentHole >= pHole) m *= 2
+            if (gameType == GameType.RAW_JUNKER) {
+                val currentMultiplier = if (pressHoles.isEmpty()) 1 else {
+                    var m = 1
+                    pressHoles.sorted().forEach { pHole ->
+                        if (currentHole >= pHole) m *= 2
+                    }
+                    m
                 }
-                m
-            }
 
-            if (pressHoles.contains(currentHole)) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFD32F2F)), modifier = Modifier.fillMaxWidth()) {
-                    Text("🔴 PRESS CALLED ON THIS HOLE (x$currentMultiplier)", color = Color.White, modifier = Modifier.padding(12.dp), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-            } else {
-                val hasPressActive = pressHoles.isNotEmpty()
-                val isBeforeFirstPress = hasPressActive && currentHole < pressHoles.min()
-                
-                if (isBeforeFirstPress) {
-                    // Disabled "until the hole where it was activated"
-                    Button(
-                        onClick = {},
-                        enabled = false,
-                        colors = ButtonDefaults.buttonColors(containerColor = goldColor.copy(alpha = 0.5f), disabledContainerColor = goldColor.copy(alpha = 0.3f)),
-                        modifier = Modifier.fillMaxWidth().height(44.dp)
-                    ) {
-                        Text("Call Press Match", color = if (isDarkMode) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                if (pressHoles.contains(currentHole)) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFD32F2F)), modifier = Modifier.fillMaxWidth()) {
+                        Text("🔴 PRESS CALLED ON THIS HOLE (x$currentMultiplier)", color = Color.White, modifier = Modifier.padding(12.dp), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                     }
                 } else {
-                    if (currentMultiplier > 1) {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE65100)), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                            Text("🔥 PRESS ACTIVE — DOTS MULTIPLIER: x$currentMultiplier", color = Color.White, modifier = Modifier.fillMaxWidth().padding(8.dp), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    val hasPressActive = pressHoles.isNotEmpty()
+                    val isBeforeFirstPress = hasPressActive && currentHole < pressHoles.min()
+                    
+                    if (isBeforeFirstPress) {
+                        // Disabled "until the hole where it was activated"
+                        Button(
+                            onClick = {},
+                            enabled = false,
+                            colors = ButtonDefaults.buttonColors(containerColor = goldColor.copy(alpha = 0.5f), disabledContainerColor = goldColor.copy(alpha = 0.3f)),
+                            modifier = Modifier.fillMaxWidth().height(44.dp)
+                        ) {
+                            Text("Call Press Match", color = if (isDarkMode) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                        }
+                    } else {
+                        if (currentMultiplier > 1) {
+                            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE65100)), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                Text("🔥 PRESS ACTIVE — DOTS MULTIPLIER: x$currentMultiplier", color = Color.White, modifier = Modifier.fillMaxWidth().padding(8.dp), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            }
+                        }
+                        Button(
+                            onClick = { viewModel.callPress(currentHole); triggerAutoSave() }, 
+                            enabled = !isRoundLocked,
+                            colors = ButtonDefaults.buttonColors(containerColor = goldColor, disabledContainerColor = goldColor.copy(alpha = 0.5f)), 
+                            modifier = Modifier.fillMaxWidth().height(44.dp)
+                        ) {
+                            val btnText = if (currentMultiplier > 1) "Call Additional Press (x${currentMultiplier * 2})" else "Call Press Match"
+                            Text(btnText, color = if (isDarkMode) Color.Black else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
                         }
                     }
-                    Button(
-                        onClick = { viewModel.callPress(currentHole); triggerAutoSave() }, 
-                        enabled = !isRoundLocked,
-                        colors = ButtonDefaults.buttonColors(containerColor = goldColor, disabledContainerColor = goldColor.copy(alpha = 0.5f)), 
-                        modifier = Modifier.fillMaxWidth().height(44.dp)
-                    ) {
-                        val btnText = if (currentMultiplier > 1) "Call Additional Press (x${currentMultiplier * 2})" else "Call Press Match"
-                        Text(btnText, color = if (isDarkMode) Color.Black else Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
-                    }
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
             LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (useTeams && teams.size == 2) {
+                if (gameType == GameType.RAW_JUNKER && useTeams && teams.size == 2) {
                     teams.forEach { team ->
                         item {
                             Box(modifier = Modifier.fillMaxWidth().background(GolfGreen.copy(alpha = 0.25f)).padding(vertical = 8.dp, horizontal = 12.dp)) {
@@ -567,7 +646,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                             if (player != null) {
                                 val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                                 val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, { 
+                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = true, { 
                                     viewModel.updateGrossScore(player.id, currentHole, it)
                                     triggerAutoSave() 
                                 }, { 
@@ -581,7 +660,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                     items(players) { player ->
                         val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                         val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, { 
+                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = (gameType == GameType.RAW_JUNKER), { 
                             viewModel.updateGrossScore(player.id, currentHole, it)
                             triggerAutoSave()
                         }, { 
@@ -609,6 +688,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
 fun PlayerScoreRow(
     player: Player, holeScore: HoleScore, holePar: Int, isDarkMode: Boolean,
     enabled: Boolean,
+    showJunkDots: Boolean = true,
     onGrossChange: (Int) -> Unit, onDotToggle: (String) -> Unit
 ) {
     val cardBg = getCardBg(isDarkMode)
@@ -648,24 +728,26 @@ fun PlayerScoreRow(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Select Side Junk Dots:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textSecondary)
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Drive", holeScore.hasDrive, textPrimary, enabled) { onDotToggle("hasDrive") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Sandy", holeScore.hasSandy, textPrimary, enabled) { onDotToggle("hasSandy") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Poley", holeScore.hasPoley, textPrimary, enabled) { onDotToggle("hasPoley") } }
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Dbl Poley", holeScore.hasDoublePoley, textPrimary, enabled) { onDotToggle("hasDoublePoley") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("Jacques", holeScore.hasJacques, textPrimary, enabled) { onDotToggle("hasJacques") } }
-                    Box(modifier = Modifier.weight(1f)) { DotCheckbox("LostBoy", holeScore.hasLostBoy, textPrimary, enabled) { onDotToggle("hasLostBoy") } }
-                }
-                if (holePar == 3) {
+            if (showJunkDots) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Select Side Junk Dots:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textSecondary)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                        DotCheckbox("🔴 CTP (Closest to Pin)", holeScore.hasCtp, textPrimary, enabled) { onDotToggle("hasCtp") }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Drive", holeScore.hasDrive, textPrimary, enabled) { onDotToggle("hasDrive") } }
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Sandy", holeScore.hasSandy, textPrimary, enabled) { onDotToggle("hasSandy") } }
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Poley", holeScore.hasPoley, textPrimary, enabled) { onDotToggle("hasPoley") } }
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Dbl Poley", holeScore.hasDoublePoley, textPrimary, enabled) { onDotToggle("hasDoublePoley") } }
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("Jacques", holeScore.hasJacques, textPrimary, enabled) { onDotToggle("hasJacques") } }
+                        Box(modifier = Modifier.weight(1f)) { DotCheckbox("LostBoy", holeScore.hasLostBoy, textPrimary, enabled) { onDotToggle("hasLostBoy") } }
+                    }
+                    if (holePar == 3) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                            DotCheckbox("🔴 CTP (Closest to Pin)", holeScore.hasCtp, textPrimary, enabled) { onDotToggle("hasCtp") }
+                        }
                     }
                 }
             }
