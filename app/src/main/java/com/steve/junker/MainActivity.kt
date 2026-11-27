@@ -164,7 +164,8 @@ class MainActivity : ComponentActivity() {
                                     activeTeamsList = if (effectiveUseTeams) gameViewModel.teams.value else emptyList(),
                                     gameType = selectedGameType,
                                     isBlitzEnabled = if (selectedGameType == com.steve.junker.data.models.GameType.NINES) gameViewModel.isBlitzEnabled.value else false,
-                                    pointValue = gameViewModel.pointValue.value
+                                    pointValue = gameViewModel.pointValue.value,
+                                    useHandicaps = gameViewModel.useHandicaps.value
                                 )
                                 navController.navigate("scorecard") 
                             } 
@@ -255,6 +256,7 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
     val gameType by viewModel.gameType.collectAsState()
     val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
     val pointValue by viewModel.pointValue.collectAsState()
+    val useHandicaps by viewModel.useHandicaps.collectAsState()
     var expandedTeamIds by remember { mutableStateOf(emptySet<String>()) }
     var selectedHolePlayerForPopup by remember { mutableStateOf<Pair<Player, Int>?>(null) }
     val isRoundLocked by viewModel.isRoundLocked.collectAsState()
@@ -613,7 +615,7 @@ fun LeaderboardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onBackT
                             Text("B9", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                         }
                         Box(modifier = Modifier.width(95.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
-                            Text("NET", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                            Text(if (useHandicaps) "NET" else "GROSS", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
                         }
                         Box(modifier = Modifier.width(110.dp).height(56.dp).border(1.dp, Color.White.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) {
                             Text(if (gameType == GameType.NINES) "PTS" else "JUNK", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)

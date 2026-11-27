@@ -99,4 +99,18 @@ class GameViewModelVoiceTest {
         val sScore = vm.scores.value["p2"]!![0]
         assertTrue(sScore.hasDrive)
     }
+
+    @Test
+    fun `when useHandicaps is false, netScore equals grossScore for all players`() {
+        val vm = GameViewModel()
+        vm.setupGame(players, course, matchInTeamMode = false, gameType = GameType.RAW_JUNKER, useHandicaps = false)
+
+        vm.updateGrossScore("p4", 1, 6) // Bob has hcp 20 vs Mark hcp 5, normally gets strokes
+        assertEquals(6, vm.scores.value["p4"]!![0].netScore)
+
+        val parsed = parseGolfTranscript("Hole 2 Keith 5", currentHole = 1, activePlayers = players)
+        vm.applyVoiceBatch(parsed) {}
+        assertEquals(5, vm.scores.value["p3"]!![1].grossScore)
+        assertEquals(5, vm.scores.value["p3"]!![1].netScore)
+    }
 }
