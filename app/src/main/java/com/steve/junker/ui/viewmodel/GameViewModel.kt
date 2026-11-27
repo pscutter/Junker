@@ -122,11 +122,15 @@ class GameViewModel : ViewModel() {
     private val _pointValue = MutableStateFlow(1.0)
     val pointValue: StateFlow<Double> = _pointValue.asStateFlow()
 
+    private val _useHandicaps = MutableStateFlow(true)
+    val useHandicaps: StateFlow<Boolean> = _useHandicaps.asStateFlow()
+
     fun setUseTeams(enabled: Boolean) { _useTeams.value = enabled }
     fun configureTeams(teamList: List<Team>) { _teams.value = teamList }
     fun setGameType(type: GameType) { _gameType.value = type }
     fun setBlitzEnabled(enabled: Boolean) { _isBlitzEnabled.value = enabled }
     fun setPointValue(value: Double) { _pointValue.value = value.coerceAtLeast(0.0) }
+    fun setUseHandicaps(enabled: Boolean) { _useHandicaps.value = enabled }
 
     private val _savedPlayers = MutableStateFlow<List<Player>>(emptyList())
     val savedPlayers: StateFlow<List<Player>> = _savedPlayers.asStateFlow()
@@ -235,7 +239,8 @@ class GameViewModel : ViewModel() {
         activeTeamsList: List<Team> = emptyList(),
         gameType: GameType = _gameType.value,
         isBlitzEnabled: Boolean = _isBlitzEnabled.value,
-        pointValue: Double = 1.0
+        pointValue: Double = 1.0,
+        useHandicaps: Boolean = true
     ) {
         _activePlayers.value = players
         _selectedCourse.value = course
@@ -246,6 +251,7 @@ class GameViewModel : ViewModel() {
         _gameType.value = gameType
         _isBlitzEnabled.value = isBlitzEnabled
         _pointValue.value = pointValue.coerceAtLeast(0.0)
+        _useHandicaps.value = useHandicaps
         _isRoundLocked.value = false
         activeRoundCreatorDeviceId = currentDeviceId
         
@@ -260,6 +266,7 @@ class GameViewModel : ViewModel() {
 
     private fun computeWheeledNetScore(grossScore: Int, holeIndex: Int, playerId: String): Int {
         if (grossScore == 0) return 0
+        if (!_useHandicaps.value) return grossScore
         val currentCourse = _selectedCourse.value ?: return grossScore
         val activeField = _activePlayers.value
         if (activeField.isEmpty()) return grossScore
@@ -485,6 +492,7 @@ class GameViewModel : ViewModel() {
         val currentGameType = gameType.value
         val currentBlitzEnabled = isBlitzEnabled.value
         val currentPointValue = pointValue.value
+        val currentUseHandicaps = useHandicaps.value
         val currentScoresMap = scores.value
         
         if (currentPlayers.isEmpty()) return
@@ -513,6 +521,7 @@ class GameViewModel : ViewModel() {
             rootContainerJsonObject.put("gameType", currentGameType.name)
             rootContainerJsonObject.put("isBlitzEnabled", currentBlitzEnabled)
             rootContainerJsonObject.put("pointValue", currentPointValue)
+            rootContainerJsonObject.put("useHandicaps", currentUseHandicaps)
             rootContainerJsonObject.put("isLocked", isLocked || _isRoundLocked.value)
             rootContainerJsonObject.put("creatorDeviceId", activeRoundCreatorDeviceId ?: currentDeviceId)
             val pressHolesArray = JSONArray()
@@ -581,6 +590,7 @@ class GameViewModel : ViewModel() {
             var restoredGameType = GameType.RAW_JUNKER
             var restoredBlitzEnabled = false
             var restoredPointValue = 0.0
+            var restoredUseHandicaps = true
             val restoredPressHoles = mutableListOf<Int>()
             var restoredIsLocked = false
             var restoredCreatorDeviceId = ""
@@ -595,6 +605,7 @@ class GameViewModel : ViewModel() {
                     restoredGameType = runCatching { GameType.valueOf(gameTypeStr) }.getOrDefault(GameType.RAW_JUNKER)
                     restoredBlitzEnabled = rootJson.optBoolean("isBlitzEnabled", false)
                     restoredPointValue = rootJson.optDouble("pointValue", 0.0).takeIf { !it.isNaN() } ?: 0.0
+                    restoredUseHandicaps = rootJson.optBoolean("useHandicaps", true)
                     restoredIsLocked = rootJson.optBoolean("isLocked", false)
                     restoredCreatorDeviceId = rootJson.optString("creatorDeviceId", "")
                     if (rootJson.has("pressHoles")) {
@@ -681,6 +692,7 @@ class GameViewModel : ViewModel() {
                 _gameType.value = restoredGameType
                 _isBlitzEnabled.value = restoredBlitzEnabled
                 _pointValue.value = restoredPointValue
+                _useHandicaps.value = restoredUseHandicaps
                 _activePlayers.value = reconstructedPlayers
                 _scores.value = reconstructedScores
                 _pressHoles.value = restoredPressHoles

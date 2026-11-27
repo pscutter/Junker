@@ -97,6 +97,7 @@ fun PlayerSetupScreen(
     val gameType by viewModel.gameType.collectAsState()
     val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
     val pointValue by viewModel.pointValue.collectAsState()
+    val useHandicaps by viewModel.useHandicaps.collectAsState()
     var customPointValueText by remember {
         mutableStateOf(
             if (pointValue == 0.0) "0"
@@ -179,7 +180,7 @@ fun PlayerSetupScreen(
                         }
                     }
 
-                    // "$ / Pt" field + conditional Blitz checkbox
+                    // "$ / Pt" field + "Use Handicaps" + conditional Blitz checkbox
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -207,21 +208,22 @@ fun PlayerSetupScreen(
                             )
                         )
 
-                        if (gameType == GameType.NINES) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f).clickable { viewModel.setBlitzEnabled(!isBlitzEnabled) }
-                            ) {
-                                Checkbox(checked = isBlitzEnabled, onCheckedChange = { viewModel.setBlitzEnabled(it) })
-                                Text("Blitz (2+ strokes)", color = textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        } else {
-                            Text(
-                                text = if (useTeams) "2v2 Best-Ball (4 players)" else "Individual Match (1–4 players)",
-                                color = textSecondary,
-                                fontSize = 12.sp,
-                                modifier = Modifier.weight(1f)
-                            )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f).clickable { viewModel.setUseHandicaps(!useHandicaps) }
+                        ) {
+                            Checkbox(checked = useHandicaps, onCheckedChange = { viewModel.setUseHandicaps(it) })
+                            Text("Use Handicaps", color = textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    if (gameType == GameType.NINES) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().clickable { viewModel.setBlitzEnabled(!isBlitzEnabled) }
+                        ) {
+                            Checkbox(checked = isBlitzEnabled, onCheckedChange = { viewModel.setBlitzEnabled(it) })
+                            Text("Blitz Variant (2+ stroke win takes all points)", color = textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -368,17 +370,25 @@ fun PlayerSetupScreen(
                                     Box(
                                         modifier = Modifier
                                             .background(
-                                                color = if (isSelected) GolfGreen else textSecondary.copy(alpha = 0.15f),
+                                                color = when {
+                                                    !useHandicaps -> textSecondary.copy(alpha = 0.08f)
+                                                    isSelected -> GolfGreen
+                                                    else -> textSecondary.copy(alpha = 0.15f)
+                                                },
                                                 shape = CircleShape
                                             )
                                             .padding(horizontal = 10.dp, vertical = 5.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
-                                            text = "HCP ${player.handicap}",
+                                            text = if (useHandicaps) "HCP ${player.handicap}" else "Gross",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.ExtraBold,
-                                            color = if (isSelected) Color.White else textPrimary
+                                            color = when {
+                                                !useHandicaps -> textSecondary.copy(alpha = 0.65f)
+                                                isSelected -> Color.White
+                                                else -> textPrimary
+                                            }
                                         )
                                     }
                                     Text(
@@ -457,7 +467,8 @@ fun PlayerSetupScreen(
                             activeTeamsList = builtTeamsList,
                             gameType = gameType,
                             isBlitzEnabled = if (gameType == GameType.NINES) isBlitzEnabled else false,
-                            pointValue = pointValue
+                            pointValue = pointValue,
+                            useHandicaps = useHandicaps
                         )
                         onSetupComplete()
                     }
@@ -716,6 +727,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
     val teams by viewModel.teams.collectAsState()
     val gameType by viewModel.gameType.collectAsState()
     val isBlitzEnabled by viewModel.isBlitzEnabled.collectAsState()
+    val useHandicaps by viewModel.useHandicaps.collectAsState()
     val isRoundLocked by viewModel.isRoundLocked.collectAsState()
     
     val listState = rememberLazyListState()
@@ -921,6 +933,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
 
             val lowestHandicap = players.minOfOrNull { it.handicap } ?: 0
             fun strokesForPlayer(player: Player): Int {
+                if (!useHandicaps) return 0
                 val wheeledHcp = player.handicap - lowestHandicap
                 var s = 0
                 if (wheeledHcp >= holeHcp) s += 1
@@ -947,7 +960,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                             if (player != null) {
                                 val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                                 val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = true, strokesOnHole = strokesForPlayer(player), { 
+                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = true, strokesOnHole = strokesForPlayer(player), useHandicaps = useHandicaps, { 
                                     viewModel.updateGrossScore(player.id, currentHole, it)
                                     triggerAutoSave() 
                                 }, { 
@@ -961,7 +974,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                     items(players) { player ->
                         val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                         val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = (gameType == GameType.RAW_JUNKER), strokesOnHole = strokesForPlayer(player), { 
+                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = (gameType == GameType.RAW_JUNKER), strokesOnHole = strokesForPlayer(player), useHandicaps = useHandicaps, { 
                             viewModel.updateGrossScore(player.id, currentHole, it)
                             triggerAutoSave()
                         }, { 
@@ -1140,6 +1153,7 @@ fun PlayerScoreRow(
     enabled: Boolean,
     showJunkDots: Boolean = true,
     strokesOnHole: Int = 0,
+    useHandicaps: Boolean = true,
     onGrossChange: (Int) -> Unit, onDotToggle: (String) -> Unit
 ) {
     val cardBg = getCardBg(isDarkMode)
@@ -1152,7 +1166,7 @@ fun PlayerScoreRow(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(player.name, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = textPrimary)
-                    if (strokesOnHole > 0) {
+                    if (useHandicaps && strokesOnHole > 0) {
                         Text(
                             text = " ${"•".repeat(strokesOnHole)}",
                             fontSize = 18.sp,
@@ -1162,7 +1176,12 @@ fun PlayerScoreRow(
                     }
                 }
                 Box(modifier = Modifier.background(if (isDarkMode) Color(0xFF2C2C2C) else Color(0xFFE8F5E9)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                    Text(text = "NET: ${if (holeScore.grossScore > 0) holeScore.netScore else "-"}", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = goldColor)
+                    val badgeText = if (useHandicaps) {
+                        "NET: ${if (holeScore.grossScore > 0) holeScore.netScore else "-"}"
+                    } else {
+                        "GROSS: ${if (holeScore.grossScore > 0) holeScore.grossScore else "-"}"
+                    }
+                    Text(text = badgeText, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = goldColor)
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
