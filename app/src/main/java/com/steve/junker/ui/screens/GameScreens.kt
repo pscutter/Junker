@@ -15,8 +15,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -71,7 +77,7 @@ fun JunkerLaunchScreen(onTimeout: () -> Unit) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("JUNKER", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, letterSpacing = 6.sp)
+            Text("DOTMATRIX", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, letterSpacing = 6.sp)
             Spacer(modifier = Modifier.height(8.dp))
             Text("Side-Action Scorecard Matrix", fontSize = 14.sp, color = GoldAccent, fontWeight = FontWeight.Medium, letterSpacing = 2.sp)
         }
@@ -84,9 +90,6 @@ fun PlayerSetupScreen(
     onMenuClick: () -> Unit,
     onSetupComplete: () -> Unit
 ) {
-    var newPlayerName by remember { mutableStateOf("") }
-    var newPlayerHandicap by remember { mutableStateOf("") }
-    
     val savedPlayers by viewModel.savedPlayers.collectAsState()
     val isPlayersLoading by viewModel.isPlayersLoading.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
@@ -101,10 +104,10 @@ fun PlayerSetupScreen(
             else String.format(java.util.Locale.US, "%.2f", pointValue)
         )
     }
-    
+
     val activeFoursome = remember { mutableStateListOf<Player>() }
     var errorMessage by remember { mutableStateOf("") }
-    val focusManager = LocalFocusManager.current
+    var showAddPlayerDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshPlayers()
@@ -123,214 +126,200 @@ fun PlayerSetupScreen(
     val goldColor = getGoldThemeColor(isDarkMode)
 
     Surface(modifier = Modifier.fillMaxSize().imePadding(), color = appBg) {
-        Column(modifier = Modifier.padding(24.dp)) {
-            DrawerHeaderBar("Player Directory", isDarkMode, onMenuClick, { viewModel.toggleTheme() })
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp).navigationBarsPadding()) {
+            DrawerHeaderBar("New Match Setup", isDarkMode, onMenuClick, { viewModel.toggleTheme() })
 
-            // Game Format Selector (Raw Junker vs Nines)
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // 1. Compact Match Settings Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                val isRawJunker = gameType == GameType.RAW_JUNKER
-                Button(
-                    onClick = {
-                        viewModel.setGameType(GameType.RAW_JUNKER)
-                        errorMessage = ""
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRawJunker) GolfGreen else cardBg,
-                        contentColor = if (isRawJunker) Color.White else textPrimary
-                    ),
-                    border = if (isRawJunker) null else BorderStroke(1.dp, Color.Gray),
-                    modifier = Modifier.weight(1f).height(42.dp)
-                ) {
-                    Text("Raw Junker", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-
-                Button(
-                    onClick = {
-                        viewModel.setGameType(GameType.NINES)
-                        viewModel.setUseTeams(false)
-                        errorMessage = ""
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (!isRawJunker) GolfGreen else cardBg,
-                        contentColor = if (!isRawJunker) Color.White else textPrimary
-                    ),
-                    border = if (!isRawJunker) null else BorderStroke(1.dp, Color.Gray),
-                    modifier = Modifier.weight(1f).height(42.dp)
-                ) {
-                    Text("Nines", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-            }
-
-            Text(
-                if (gameType == GameType.NINES) "Select or create players for Nines (3 or 4)"
-                else "Select or create players for the match (1 to 4)",
-                style = MaterialTheme.typography.bodyMedium,
-                color = textSecondary
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (gameType == GameType.RAW_JUNKER) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = useTeams, onCheckedChange = { viewModel.setUseTeams(it) })
-                    Text("Enable 2v2 Team Scoring Mode", color = textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = isBlitzEnabled, onCheckedChange = { viewModel.setBlitzEnabled(it) })
-                    Text("Enable Blitz Variant (2+ stroke win takes all points)", color = textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Point / Dot Value ($) Selector
-            Text("Point / Dot Value ($)", style = MaterialTheme.typography.titleSmall, color = textSecondary)
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val presets = listOf(0.0 to "$0", 0.5 to "$0.50", 1.0 to "$1", 2.0 to "$2", 5.0 to "$5")
-                presets.forEach { (presetVal, label) ->
-                    val isSelected = kotlin.math.abs(pointValue - presetVal) < 0.001
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.setPointValue(presetVal)
-                            customPointValueText = if (presetVal == 0.0) "0" else if (presetVal == presetVal.toLong().toDouble()) presetVal.toLong().toString() else String.format(java.util.Locale.US, "%.2f", presetVal)
-                        },
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = if (isSelected) GolfGreen else Color.Transparent,
-                            contentColor = if (isSelected) Color.White else textPrimary
-                        ),
-                        border = BorderStroke(1.dp, if (isSelected) GolfGreen else Color.Gray),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                        modifier = Modifier.weight(1f).height(38.dp)
+                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // 3-Option Segmented Format Selector
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        val isRawIndividual = gameType == GameType.RAW_JUNKER && !useTeams
+                        val isRawTeams = gameType == GameType.RAW_JUNKER && useTeams
+                        val isNines = gameType == GameType.NINES
+
+                        val options = listOf(
+                            Triple("Raw Junker", isRawIndividual) {
+                                viewModel.setGameType(GameType.RAW_JUNKER)
+                                viewModel.setUseTeams(false)
+                                errorMessage = ""
+                            },
+                            Triple("2v2 Teams", isRawTeams) {
+                                viewModel.setGameType(GameType.RAW_JUNKER)
+                                viewModel.setUseTeams(true)
+                                errorMessage = ""
+                            },
+                            Triple("Nines", isNines) {
+                                viewModel.setGameType(GameType.NINES)
+                                viewModel.setUseTeams(false)
+                                errorMessage = ""
+                            }
+                        )
+
+                        options.forEach { (label, selected, onSelect) ->
+                            Button(
+                                onClick = onSelect,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (selected) GolfGreen else appBg,
+                                    contentColor = if (selected) Color.White else textPrimary
+                                ),
+                                border = if (selected) null else BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f)),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                modifier = Modifier.weight(1f).height(36.dp)
+                            ) {
+                                Text(label, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, softWrap = false)
+                            }
+                        }
                     }
-                }
-                OutlinedTextField(
-                    value = customPointValueText,
-                    onValueChange = { raw ->
-                        val cleaned = raw.filter { it.isDigit() || it == '.' }
-                        if (cleaned.count { it == '.' } <= 1) {
-                            customPointValueText = cleaned
-                            cleaned.toDoubleOrNull()?.let { viewModel.setPointValue(it) }
+
+                    // "$ / Pt" field + conditional Blitz checkbox
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = customPointValueText,
+                            onValueChange = { raw ->
+                                val cleaned = raw.filter { it.isDigit() || it == '.' }
+                                if (cleaned.count { it == '.' } <= 1) {
+                                    customPointValueText = cleaned
+                                    cleaned.toDoubleOrNull()?.let { viewModel.setPointValue(it) }
+                                }
+                            },
+                            label = { Text("$ / Pt", fontSize = 11.sp) },
+                            prefix = { Text("$", fontSize = 13.sp, color = textSecondary) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.width(96.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = GolfGreen,
+                                unfocusedBorderColor = Color.Gray,
+                                focusedTextColor = textPrimary,
+                                unfocusedTextColor = textPrimary
+                            )
+                        )
+
+                        if (gameType == GameType.NINES) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f).clickable { viewModel.setBlitzEnabled(!isBlitzEnabled) }
+                            ) {
+                                Checkbox(checked = isBlitzEnabled, onCheckedChange = { viewModel.setBlitzEnabled(it) })
+                                Text("Blitz (2+ strokes)", color = textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        } else {
+                            Text(
+                                text = if (useTeams) "2v2 Best-Ball (4 players)" else "Individual Match (1–4 players)",
+                                color = textSecondary,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f)
+                            )
                         }
-                    },
-                    label = { Text("$", fontSize = 11.sp) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.width(74.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = GolfGreen,
-                        unfocusedBorderColor = Color.Gray,
-                        focusedTextColor = textPrimary,
-                        unfocusedTextColor = textPrimary
-                    )
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = newPlayerName,
-                    onValueChange = { input ->
-                        newPlayerName = if (input.isEmpty()) "" else input.substring(0, 1).uppercase() + input.substring(1).lowercase()
-                    },
-                    label = { Text("New Name") },
-                    modifier = Modifier.weight(1.5f),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GolfGreen, unfocusedBorderColor = Color.Gray, focusedTextColor = textPrimary, unfocusedTextColor = textPrimary)
-                )
-
-                OutlinedTextField(
-                    value = newPlayerHandicap,
-                    onValueChange = { if (it.isEmpty() || (it.all { c -> c.isDigit() } && it.length <= 2)) newPlayerHandicap = it },
-                    label = { Text("HCP") },
-                    modifier = Modifier.weight(0.8f),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GolfGreen, unfocusedBorderColor = Color.Gray, focusedTextColor = textPrimary, unfocusedTextColor = textPrimary)
-                )
-
-                Button(
-                    onClick = {
-                        val hcpParsed = newPlayerHandicap.toIntOrNull()
-                        if (newPlayerName.isBlank()) errorMessage = "Enter a valid name."
-                        else if (hcpParsed == null || hcpParsed !in 0..54) errorMessage = "Enter handicap (0-54)."
-                        else {
-                            viewModel.savePlayerToDb(Player(java.util.UUID.randomUUID().toString(), newPlayerName.trim(), hcpParsed))
-                            newPlayerName = ""
-                            newPlayerHandicap = ""
-                            errorMessage = ""
-                            focusManager.clearFocus()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = goldColor),
-                    modifier = Modifier.height(56.dp)
-                ) {
-                    Text("Create", color = if (isDarkMode) Color.Black else Color.White, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
             if (errorMessage.isNotEmpty()) {
-                Text(errorMessage, color = Color.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-            Text("Active Match Queue (${activeFoursome.size}/4):", style = MaterialTheme.typography.titleSmall, color = goldColor)
-            
-            Card(colors = CardDefaults.cardColors(containerColor = cardBg), modifier = Modifier.fillMaxWidth().height(65.dp).padding(vertical = 4.dp)) {
-                Row(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (activeFoursome.isEmpty()) Text("Tap profiles below to queue...", color = textSecondary)
-                    else activeFoursome.forEach { p ->
-                        SuggestionChip(onClick = { activeFoursome.remove(p) }, label = { Text("${p.name} (${p.handicap})", color = Color.White) }, colors = SuggestionChipDefaults.suggestionChipColors(containerColor = GolfGreen))
-                    }
-                }
+                Text(errorMessage, color = Color.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            
-            if (useTeams && activeFoursome.size == 4) {
-                Card(colors = CardDefaults.cardColors(containerColor = cardBg), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        Text("Teams Configuration Layout:", color = goldColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Team 1: ${activeFoursome.getOrNull(0)?.name} / ${activeFoursome.getOrNull(1)?.name}", color = textPrimary, fontSize = 11.sp)
-                            Text("Team 2: ${activeFoursome.getOrNull(2)?.name} / ${activeFoursome.getOrNull(3)?.name}", color = textPrimary, fontSize = 11.sp)
+
+            // 2. Compact Active Match Queue
+            Text("Active Match Queue (${activeFoursome.size}/4):", style = MaterialTheme.typography.titleSmall, color = goldColor)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp, max = 56.dp).padding(vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (activeFoursome.isEmpty()) {
+                        Text("Tap profiles below to queue...", color = textSecondary, fontSize = 13.sp)
+                    } else {
+                        activeFoursome.forEach { p ->
+                            SuggestionChip(
+                                onClick = { activeFoursome.remove(p) },
+                                label = { Text("${p.name} (${p.handicap})", color = Color.White, fontSize = 12.sp) },
+                                colors = SuggestionChipDefaults.suggestionChipColors(containerColor = GolfGreen)
+                            )
                         }
                     }
                 }
             }
 
+            // 2v2 Partner Preview & Swap Partners
+            if (gameType == GameType.RAW_JUNKER && useTeams && activeFoursome.size == 4) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = cardBg),
+                    border = BorderStroke(1.dp, GolfGreen.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Team 1: ${activeFoursome[0].name} / ${activeFoursome[1].name}", color = textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Team 2: ${activeFoursome[2].name} / ${activeFoursome[3].name}", color = textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                val temp = activeFoursome[1]
+                                activeFoursome[1] = activeFoursome[2]
+                                activeFoursome[2] = temp
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Text("⇄ Swap Partners", color = goldColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // 3. Saved Directory Profiles Header + "+ New Player"
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Saved Directory Profiles:", style = MaterialTheme.typography.titleSmall, color = textSecondary)
                     if (isPlayersLoading) {
                         CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = GolfGreen)
                     }
                 }
-                IconButton(
-                    onClick = { viewModel.refreshPlayers() },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Text("🔄", fontSize = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { showAddPlayerDialog = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Icon(Icons.Default.Person, contentDescription = null, tint = GolfGreen, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("+ New Player", color = GolfGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                    IconButton(
+                        onClick = { viewModel.refreshPlayers() },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh players", tint = textSecondary, modifier = Modifier.size(18.dp))
+                    }
                 }
             }
-            
+
+            // 4. Maximized Saved Players LazyColumn
             if (savedPlayers.isEmpty()) {
                 Box(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -346,34 +335,103 @@ fun PlayerSetupScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
                             Text("No players found in directory", color = textPrimary, fontWeight = FontWeight.SemiBold)
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text("Create a new player above or tap 🔄 to reload.", color = textSecondary, fontSize = 13.sp)
+                            Text("Tap + New Player above or refresh to reload.", color = textSecondary, fontSize = 13.sp)
                         }
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(savedPlayers) { player ->
+                LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(savedPlayers, key = { it.id }) { player ->
                         val isSelected = activeFoursome.any { it.id == player.id }
+                        var menuExpanded by remember { mutableStateOf(false) }
+
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = if (isSelected) (if (isDarkMode) Color(0xFF2E2E2E) else Color(0xFFE0E0E0)) else cardBg),
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) GolfGreen.copy(alpha = if (isDarkMode) 0.22f else 0.10f) else cardBg
+                            ),
+                            border = if (isSelected) BorderStroke(1.5.dp, GolfGreen) else null,
+                            modifier = Modifier.fillMaxWidth().clickable {
                                 if (isSelected) activeFoursome.removeAll { it.id == player.id }
                                 else if (activeFoursome.size < 4) activeFoursome.add(player)
                             }
                         ) {
-                            Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Column {
-                                    Text(player.name, style = MaterialTheme.typography.titleMedium, color = textPrimary)
-                                    Text("Handicap: ${player.handicap}", style = MaterialTheme.typography.bodySmall, color = textSecondary)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(
+                                                color = if (isSelected) GolfGreen else textSecondary.copy(alpha = 0.15f),
+                                                shape = CircleShape
+                                            )
+                                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "HCP ${player.handicap}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = if (isSelected) Color.White else textPrimary
+                                        )
+                                    }
+                                    Text(
+                                        text = player.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = textPrimary
+                                    )
                                 }
-                                IconButton(onClick = { viewModel.deletePlayerFromDb(player) }) { Text("✕", color = Color.Red, fontWeight = FontWeight.Bold) }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = GolfGreen,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Box {
+                                        IconButton(
+                                            onClick = { menuExpanded = true },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.MoreVert,
+                                                contentDescription = "Player options",
+                                                tint = textSecondary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                        DropdownMenu(
+                                            expanded = menuExpanded,
+                                            onDismissRequest = { menuExpanded = false }
+                                        ) {
+                                            DropdownMenuItem(
+                                                text = { Text("Delete Player", color = Color.Red, fontWeight = FontWeight.SemiBold) },
+                                                onClick = {
+                                                    menuExpanded = false
+                                                    activeFoursome.removeAll { it.id == player.id }
+                                                    viewModel.deletePlayerFromDb(player)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Button(
                 onClick = {
@@ -405,11 +463,76 @@ fun PlayerSetupScreen(
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = GolfGreen),
-                modifier = Modifier.fillMaxWidth().height(54.dp)
+                modifier = Modifier.fillMaxWidth().height(52.dp)
             ) {
                 Text("Confirm & Select Course", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
+
+    if (showAddPlayerDialog) {
+        var dialogName by remember { mutableStateOf("") }
+        var dialogHcp by remember { mutableStateOf("") }
+        var dialogError by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showAddPlayerDialog = false },
+            title = { Text("Add New Player", fontWeight = FontWeight.Bold, color = textPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = dialogName,
+                        onValueChange = { input ->
+                            dialogName = if (input.isEmpty()) "" else input.substring(0, 1).uppercase() + input.substring(1).lowercase()
+                        },
+                        label = { Text("Player Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GolfGreen, focusedTextColor = textPrimary, unfocusedTextColor = textPrimary)
+                    )
+                    OutlinedTextField(
+                        value = dialogHcp,
+                        onValueChange = { if (it.isEmpty() || (it.all { c -> c.isDigit() } && it.length <= 2)) dialogHcp = it },
+                        label = { Text("Handicap (0–54)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GolfGreen, focusedTextColor = textPrimary, unfocusedTextColor = textPrimary)
+                    )
+                    if (dialogError.isNotEmpty()) {
+                        Text(dialogError, color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val hcpParsed = dialogHcp.toIntOrNull()
+                        if (dialogName.isBlank()) {
+                            dialogError = "Enter a valid player name."
+                        } else if (hcpParsed == null || hcpParsed !in 0..54) {
+                            dialogError = "Enter handicap between 0 and 54."
+                        } else {
+                            val newPlayer = Player(java.util.UUID.randomUUID().toString(), dialogName.trim(), hcpParsed)
+                            viewModel.savePlayerToDb(newPlayer)
+                            if (activeFoursome.size < 4) {
+                                activeFoursome.add(newPlayer)
+                            }
+                            showAddPlayerDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GolfGreen)
+                ) {
+                    Text("Save Player", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddPlayerDialog = false }) {
+                    Text("Cancel", color = textSecondary, fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = cardBg
+        )
     }
 }
 
@@ -539,7 +662,7 @@ fun CourseSetupScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onCours
             items(18) { index ->
                 Card(colors = CardDefaults.cardColors(containerColor = cardBg), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Hole ${index + 1}", color = textPrimary, modifier = Modifier.width(60.dp), fontWeight = FontWeight.Bold)
+                        Text("Hole ${index + 1}", color = textPrimary, modifier = Modifier.width(72.dp), maxLines = 1, softWrap = false, fontWeight = FontWeight.Bold)
                         OutlinedTextField(
                             value = holeHandicaps[index], onValueChange = { if (it.isEmpty() || (it.all { c -> c.isDigit() } && it.length <= 2)) holeHandicaps[index] = it },
                             label = { Text("HCP") }, modifier = Modifier.weight(1.5f), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -796,7 +919,22 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            val lowestHandicap = players.minOfOrNull { it.handicap } ?: 0
+            fun strokesForPlayer(player: Player): Int {
+                val wheeledHcp = player.handicap - lowestHandicap
+                var s = 0
+                if (wheeledHcp >= holeHcp) s += 1
+                if ((wheeledHcp - 18) >= holeHcp) s += 1
+                if ((wheeledHcp - 36) >= holeHcp) s += 1
+                return s
+            }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 if (gameType == GameType.RAW_JUNKER && useTeams && teams.size == 2) {
                     teams.forEach { team ->
                         item {
@@ -809,7 +947,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                             if (player != null) {
                                 val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                                 val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = true, { 
+                                PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = true, strokesOnHole = strokesForPlayer(player), { 
                                     viewModel.updateGrossScore(player.id, currentHole, it)
                                     triggerAutoSave() 
                                 }, { 
@@ -823,7 +961,7 @@ fun ScorecardScreen(viewModel: GameViewModel, onMenuClick: () -> Unit, onNavigat
                     items(players) { player ->
                         val playerHoleScores = scores[player.id] ?: List(18) { HoleScore() }
                         val currentHoleScore = playerHoleScores.getOrNull(currentHole - 1) ?: HoleScore()
-                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = (gameType == GameType.RAW_JUNKER), { 
+                        PlayerScoreRow(player, currentHoleScore, holePar, isDarkMode, !isRoundLocked, showJunkDots = (gameType == GameType.RAW_JUNKER), strokesOnHole = strokesForPlayer(player), { 
                             viewModel.updateGrossScore(player.id, currentHole, it)
                             triggerAutoSave()
                         }, { 
@@ -1001,42 +1139,53 @@ fun PlayerScoreRow(
     player: Player, holeScore: HoleScore, holePar: Int, isDarkMode: Boolean,
     enabled: Boolean,
     showJunkDots: Boolean = true,
+    strokesOnHole: Int = 0,
     onGrossChange: (Int) -> Unit, onDotToggle: (String) -> Unit
 ) {
     val cardBg = getCardBg(isDarkMode)
     val textPrimary = getTextPrimary(isDarkMode)
     val textSecondary = getTextSecondary(isDarkMode)
     val goldColor = getGoldThemeColor(isDarkMode)
-    val scrollState = rememberScrollState()
 
     Card(colors = CardDefaults.cardColors(containerColor = cardBg), elevation = CardDefaults.cardElevation(defaultElevation = 3.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(player.name, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = textPrimary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(player.name, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = textPrimary)
+                    if (strokesOnHole > 0) {
+                        Text(
+                            text = " ${"•".repeat(strokesOnHole)}",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = goldColor
+                        )
+                    }
+                }
                 Box(modifier = Modifier.background(if (isDarkMode) Color(0xFF2C2C2C) else Color(0xFFE8F5E9)).padding(horizontal = 8.dp, vertical = 4.dp)) {
                     Text(text = "NET: ${if (holeScore.grossScore > 0) holeScore.netScore else "-"}", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = goldColor)
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Select Gross Score:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = textSecondary)
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(scrollState), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (scoreOption in 1..8) {
-                        val isSelected = holeScore.grossScore == scoreOption
-                        OutlinedButton(
-                            onClick = { onGrossChange(scoreOption) },
-                            enabled = enabled,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (isSelected) GolfGreen else Color.Transparent, 
-                                contentColor = if (isSelected) Color.White else textPrimary,
-                                disabledContainerColor = if (isSelected) GolfGreen.copy(alpha = 0.5f) else Color.Transparent,
-                                disabledContentColor = if (isSelected) Color.White.copy(alpha = 0.5f) else textPrimary.copy(alpha = 0.5f)
-                            ),
-                            border = BorderStroke(1.5.dp, if (isSelected) GolfGreen else textSecondary.copy(alpha = 0.6f)),
-                            modifier = Modifier.size(width = 46.dp, height = 42.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text(text = "$scoreOption", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
+                listOf(1..4, 5..8).forEach { range ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (scoreOption in range) {
+                            val isSelected = holeScore.grossScore == scoreOption
+                            OutlinedButton(
+                                onClick = { onGrossChange(scoreOption) },
+                                enabled = enabled,
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (isSelected) GolfGreen else Color.Transparent,
+                                    contentColor = if (isSelected) Color.White else textPrimary,
+                                    disabledContainerColor = if (isSelected) GolfGreen.copy(alpha = 0.5f) else Color.Transparent,
+                                    disabledContentColor = if (isSelected) Color.White.copy(alpha = 0.5f) else textPrimary.copy(alpha = 0.5f)
+                                ),
+                                border = BorderStroke(1.5.dp, if (isSelected) GolfGreen else textSecondary.copy(alpha = 0.6f)),
+                                modifier = Modifier.weight(1f).height(42.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) { Text(text = "$scoreOption", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
+                        }
                     }
                 }
             }
